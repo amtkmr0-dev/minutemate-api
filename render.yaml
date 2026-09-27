@@ -1,0 +1,23 @@
+services:
+  - type: web
+    name: minutemate-api
+    runtime: node
+    plan: free
+    buildCommand: npm install && npm run build
+    startCommand: node dist/index.js
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: JWT_SECRET
+        generateValue: true
+      - key: DATABASE_URL
+        sync: false
+      - key: PAYMENTS_MODE
+        value: simulation
+      - key: PAYMENTS_SIMULATION_ENABLED
+        value: "true"
+      - key: ALLOWED_ORIGINS
+        value: "*"
+      # Set these manually in the Render dashboard (never commit real values):
+      # - RAZORPAY_KEY_ID
+      # - RAZORPAY_KEY_SECRET
