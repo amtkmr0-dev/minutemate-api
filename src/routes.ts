@@ -47,11 +47,62 @@ import {
   verifyAndCreditPayment,
 } from "./payments.js";
 import { getTransactionHistory, getWalletSummary } from "./wallet.js";
+import crypto from "node:crypto";
 
 function httpError(res: Response, err: unknown, fallback: string): void {
   const status = (err as { statusCode?: number })?.statusCode ?? 500;
   const message = err instanceof Error ? err.message : fallback;
   res.status(status).json({ error: message });
+}
+
+/**
+ * ZEGOCLOUD Token04 generation — port of the official zego_server_assistant
+ * (token/nodejs/server/zegoServerAssistant.js, MIT). Token = "04" + base64(
+ *   expire:8 BE + ivLen:2 BE + iv + encLen:2 BE + AES-CBC(tokenInfo JSON)
+ * ).
+ */
+function generateZegoToken04(
+  appId: number,
+  userId: string,
+  secret: string,
+  effectiveTimeInSeconds: number,
+  payload: string
+): string {
+  if (!appId || typeof appId !== "number") throw new Error("appID invalid");
+  if (!userId || typeof userId !== "string") throw new Error("userId invalid");
+  if (!secret || typeof secret !== "string" || secret.length !== 32)
+    throw new Error("secret must be a 32 byte string");
+  if (!effectiveTimeInSeconds || typeof effectiveTimeInSeconds !== "number")
+    throw new Error("effectiveTimeInSeconds invalid");
+
+  const createTime = Math.floor(Date.now() / 1000);
+  const tokenInfo = {
+    app_id: appId,
+    user_id: userId,
+    nonce: Math.floor(Math.random() * 4294967296) - 2147483648,
+    ctime: createTime,
+    expire: createTime + effectiveTimeInSeconds,
+    payload: payload || "",
+  };
+  const plainText = JSON.stringify(tokenInfo);
+
+  const ivChars = "0123456789abcdefghijklmnopqrstuvwxyz";
+  let iv = "";
+  for (let i = 0; i < 16; i++) iv += ivChars[Math.floor(Math.random() * ivChars.length)];
+
+  const key = Buffer.from(secret, "utf8");
+  const algorithm = key.length === 16 ? "aes-128-cbc" : key.length === 24 ? "aes-192-cbc" : "aes-256-cbc";
+  const cipher = crypto.createCipheriv(algorithm, key, Buffer.from(iv, "utf8"));
+  const encrypted = Buffer.concat([cipher.update(plainText, "utf8"), cipher.final()]);
+
+  const expireBuf = Buffer.alloc(8);
+  expireBuf.writeBigInt64BE(BigInt(tokenInfo.expire));
+  const ivLenBuf = Buffer.alloc(2);
+  ivLenBuf.writeUInt16BE(iv.length);
+  const encLenBuf = Buffer.alloc(2);
+  encLenBuf.writeUInt16BE(encrypted.length);
+  const buf = Buffer.concat([expireBuf, ivLenBuf, Buffer.from(iv, "utf8"), encLenBuf, encrypted]);
+  return "04" + buf.toString("base64");
 }
 
 function publicUser(user: { id: string; phone: string; name: string | null; email: string | null }) {
@@ -365,16 +416,18 @@ export function registerRoutes(app: Express): void {
   });
 
   /**
-   * Zego token (stub/dummy).
-   * Real implementation: generate token using ZEGO_APP_ID + server secret.
-   * For testing, returns a dummy token — video will not actually connect
-   * until real Zego credentials are configured.
+   * Zego token — real Token04 generation (ZEGOCLOUD zego_server_assistant algorithm).
+   * Requires ZEGO_APP_ID and ZEGO_SERVER_SECRET env vars on the server.
+   * Without them, returns unconfigured:true so the app shows a notice.
    */
   app.post("/api/zego/token", authenticateToken, async (req: Request, res: Response) => {
     const body = (req.body as { sessionId?: string } | undefined) ?? {};
     const appId = Number(process.env.ZEGO_APP_ID || "0");
+    const serverSecret = process.env.ZEGO_SERVER_SECRET || "";
     const userId = (req as AuthenticatedRequest).userId;
-    if (!appId) {
+    const zegoUserId = `user_${userId}`;
+    const roomId = body.sessionId || `room_${Date.now()}`;
+    if (!appId || !serverSecret) {
       // Dummy mode: return a placeholder so the UI flow can be tested.
       // The Zego SDK will fail to connect with this, which is expected
       // until real credentials are added.
@@ -382,16 +435,26 @@ export function registerRoutes(app: Express): void {
         appId: 0,
         serverUrl: "",
         token: "dummy-zego-token-unconfigured",
-        userId: `user_${userId}`,
-        roomId: body.sessionId || `room_${Date.now()}`,
+        userId: zegoUserId,
+        roomId,
         // Flag so the app can show "video unavailable" instead of crashing
         unconfigured: true,
         message: "Zego not configured. Add ZEGO_APP_ID and ZEGO_SERVER_SECRET to enable video calls.",
       });
       return;
     }
-    // TODO: real token generation with zego server SDK
-    res.status(501).json({ error: "Zego token generation not implemented" });
+    try {
+      // RTC-room payload: allow loginRoom (1) + publishStream (2)
+      const payload = JSON.stringify({
+        room_id: roomId,
+        privilege: { 1: 1, 2: 1 },
+        stream_id_list: null,
+      });
+      const token = generateZegoToken04(appId, zegoUserId, serverSecret, 3600, payload);
+      res.json({ appId, serverUrl: "", token, userId: zegoUserId, roomId, expiresIn: 3600 });
+    } catch (err) {
+      httpError(res, err, "Could not generate call token.");
+    }
   });
 
   /** Create a chat thread (stub) */
