@@ -11,6 +11,8 @@ import express from "express";
 import cors from "cors";
 import helmet from "helmet";
 import { registerRoutes } from "./routes.js";
+import { registerCreatorRoutes } from "./creator.js";
+import { runStartupMigration } from "./migrate.js";
 
 const app = express();
 const PORT = Number(process.env.PORT) || 3000;
@@ -45,9 +47,10 @@ app.use(
     credentials: true,
   }),
 );
-app.use(express.json({ limit: "100kb" }));
+app.use(express.json({ limit: "8mb" }));
 
 registerRoutes(app);
+registerCreatorRoutes(app);
 
 // 404 for unknown API routes — keeps clients from misreading HTML error pages.
 app.use("/api", (_req, res) => {
@@ -63,6 +66,16 @@ app.use(
   },
 );
 
-app.listen(PORT, () => {
-  console.log(`[minutemate-api] listening on :${PORT} (NODE_ENV=${process.env.NODE_ENV || "development"})`);
-});
+async function boot(): Promise<void> {
+  try {
+    await runStartupMigration();
+    console.log("[minutemate-api] startup migration complete");
+  } catch (err) {
+    console.error("[minutemate-api] startup migration FAILED — continuing anyway", err);
+  }
+  app.listen(PORT, () => {
+    console.log(`[minutemate-api] listening on :${PORT} (NODE_ENV=${process.env.NODE_ENV || "development"})`);
+  });
+}
+
+void boot();

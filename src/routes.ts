@@ -377,43 +377,7 @@ export function registerRoutes(app: Express): void {
     });
   });
 
-  /** Create a call session (stub) */
-  app.post("/api/call/sessions", authenticateToken, async (req: Request, res: Response) => {
-    const body = (req.body as { creatorId?: string; callType?: string } | undefined) ?? {};
-    const sessionId = `sess_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-    // In stub mode, creator is "available" — real implementation would check
-    // creator online status and create a proper session record.
-    res.json({
-      sessionId,
-      creatorId: body.creatorId,
-      callType: body.callType || "video",
-      // Mock rate: ₹46/min (matches test creator)
-      pricePerMinute: 46,
-      status: "waiting",
-      // Stub: session expires in 2 minutes if not joined
-      expiresAt: new Date(Date.now() + 2 * 60 * 1000).toISOString(),
-    });
-  });
-
-  /** Get call session status (stub) */
-  app.get("/api/call/sessions/:id", authenticateToken, (req: Request, res: Response) => {
-    // Stub: always return "active" — real implementation would check DB
-    res.json({
-      sessionId: req.params.id,
-      status: "active",
-      pricePerMinute: 46,
-    });
-  });
-
-  /** Call heartbeat (stub) */
-  app.post("/api/call/sessions/:id/heartbeat", authenticateToken, (_req: Request, res: Response) => {
-    res.json({ success: true });
-  });
-
-  /** End call session (stub) */
-  app.post("/api/call/sessions/:id/end", authenticateToken, (req: Request, res: Response) => {
-    res.json({ success: true, sessionId: req.params.id, duration: 0, cost: 0 });
-  });
+  /* Call sessions, chat, and blocks are implemented persistently in creator.ts. */
 
   /**
    * Zego token — real Token04 generation (ZEGOCLOUD zego_server_assistant algorithm).
@@ -457,39 +421,5 @@ export function registerRoutes(app: Express): void {
     }
   });
 
-  /** Create a chat thread (stub) */
-  app.post("/api/chat/threads", authenticateToken, async (req: Request, res: Response) => {
-    const body = (req.body as { creatorId?: string } | undefined) ?? {};
-    if (!body.creatorId) {
-      res.status(400).json({ error: "creatorId required" });
-      return;
-    }
-    const threadId = `thread_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-    res.json({
-      id: threadId,
-      creatorId: body.creatorId,
-      createdAt: new Date().toISOString(),
-    });
-  });
-
-  /** Block a creator (stub) */
-  app.post("/api/blocks", authenticateToken, async (req: Request, res: Response) => {
-    const body = (req.body as { creatorId?: string } | undefined) ?? {};
-    if (!body.creatorId) {
-      res.status(400).json({ error: "creatorId required" });
-      return;
-    }
-    // Stub: acknowledge. Real implementation would persist to DB.
-    res.json({ success: true, creatorId: body.creatorId, blocked: true });
-  });
-
-  /** Unblock a creator (stub) */
-  app.delete("/api/blocks/:creatorId", authenticateToken, (req: Request, res: Response) => {
-    res.json({ success: true, creatorId: req.params.creatorId, blocked: false });
-  });
-
-  /** List blocked creators (stub) */
-  app.get("/api/blocks", authenticateToken, (_req: Request, res: Response) => {
-    res.json({ blocked: [] });
-  });
+  /* Chat threads and blocks are implemented persistently in creator.ts. */
 }

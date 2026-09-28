@@ -25,6 +25,9 @@ function resolveDatabaseUrl(): string {
 
 const sql = neon(resolveDatabaseUrl());
 
+/** Raw Neon HTTP client — for migrations and hand-written SQL. */
+export { sql };
+
 /** Drizzle client with the full schema attached. */
 export const db = drizzle(sql, { schema });
 

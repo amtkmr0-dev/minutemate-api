@@ -6,7 +6,7 @@
  * response boundary, because the mobile client formats balances as ₹.
  */
 
-import { pgTable, text, bigint, timestamp, boolean, index } from "drizzle-orm/pg-core";
+import { pgTable, text, bigint, timestamp, boolean, index, integer } from "drizzle-orm/pg-core";
 
 /** App users. One row per verified phone number. */
 export const users = pgTable("users", {
@@ -14,6 +14,12 @@ export const users = pgTable("users", {
   phone: text("phone").notNull().unique(), // normalized 10-digit Indian mobile
   name: text("name"),
   email: text("email"),
+  /** 'user' | 'creator' | 'agency' | 'admin'. Defaults to 'user'; creators upgrade via apply/onboarding. */
+  role: text("role").notNull().default("user"),
+  /** 'active' | 'banned'. Banned accounts cannot auth or transact. */
+  status: text("status").notNull().default("active"),
+  /** Profile picture (data URL, trial mode). */
+  avatarUrl: text("avatar_url"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
@@ -120,3 +126,239 @@ export const processedPayments = pgTable("processed_payments", {
   amountPaise: bigint("amount_paise", { mode: "number" }).notNull(),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
+
+/* ------------------------------------------------------------------ */
+/* Creators                                                            */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Creator public profile — one row per user with role='creator'.
+ * Money in paise integers, same as wallets.
+ */
+export const creatorProfiles = pgTable(
+  "creator_profiles",
+  {
+    userId: text("user_id").primaryKey().references(() => users.id, { onDelete: "cascade" }),
+    displayName: text("display_name").notNull(),
+    bio: text("bio"),
+    /** Languages as comma-separated list, e.g. "Hindi,English". */
+    languages: text("languages").notNull().default("Hindi,English"),
+    /** Price per minute in paise. */
+    pricePerMinPaise: bigint("price_per_min_paise", { mode: "number" }).notNull().default(2000),
+    avatarUrl: text("avatar_url"),
+    /** JSON array of media image URLs. */
+    mediaUrls: text("media_urls").notNull().default("[]"),
+    introVideoUrl: text("intro_video_url"),
+    /** 'audio' | 'video' | 'both' */
+    allowedCallTypes: text("allowed_call_types").notNull().default("both"),
+    /** 'pending' | 'approved' | 'rejected'. Only approved creators are listed. */
+    verificationStatus: text("verification_status").notNull().default("pending"),
+    /** 'pending' | 'verified' | 'rejected' — KYC document review state. */
+    kycStatus: text("kyc_status").notNull().default("pending"),
+    isOnline: boolean("is_online").notNull().default(false),
+    randomMatchEnabled: boolean("random_match_enabled").notNull().default(true),
+    rating: integer("rating").notNull().default(0), // avg rating * 10, e.g. 45 = 4.5
+    ratingCount: integer("rating_count").notNull().default(0),
+    totalCalls: integer("total_calls").notNull().default(0),
+    totalMinutes: integer("total_minutes").notNull().default(0),
+    /** Agency that manages this creator, if any (users.id of agency account). */
+    agencyId: text("agency_id"),
+    talksAbout: text("talks_about").notNull().default("[]"), // JSON array
+    hobbies: text("hobbies").notNull().default("[]"), // JSON array
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index("creator_profiles_online_idx").on(t.isOnline, t.verificationStatus),
+    index("creator_profiles_agency_idx").on(t.agencyId),
+  ],
+);
+
+export type CreatorProfile = typeof creatorProfiles.$inferSelect;
+export type NewCreatorProfile = typeof creatorProfiles.$inferInsert;
+
+/** Creator earnings wallet — separate from the user spending wallet. */
+export const creatorWallets = pgTable("creator_wallets", {
+  userId: text("user_id").primaryKey().references(() => users.id, { onDelete: "cascade" }),
+  /** Lifetime earnings available for withdrawal, integer paise. */
+  balancePaise: bigint("balance_paise", { mode: "number" }).notNull().default(0),
+  /** Lifetime gross earnings, integer paise. */
+  lifetimePaise: bigint("lifetime_paise", { mode: "number" }).notNull().default(0),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+/** Creator bank/UPI payout details. */
+export const creatorBankDetails = pgTable("creator_bank_details", {
+  userId: text("user_id").primaryKey().references(() => users.id, { onDelete: "cascade" }),
+  accountHolder: text("account_holder"),
+  accountNumber: text("account_number"),
+  ifsc: text("ifsc"),
+  upiId: text("upi_id"),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+/** KYC document submissions. Files stored as data URLs (trial scale). */
+export const kycSubmissions = pgTable(
+  "kyc_submissions",
+  {
+    id: text("id").primaryKey(), // uuid
+    userId: text("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+    /** 'aadhaar' | 'pan' | 'selfie' | 'video' */
+    docType: text("doc_type").notNull(),
+    /** data URL or remote URL of the document. */
+    docUrl: text("doc_url").notNull(),
+    /** 'pending' | 'approved' | 'rejected' */
+    status: text("status").notNull().default("pending"),
+    reviewerNote: text("reviewer_note"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    reviewedAt: timestamp("reviewed_at", { withTimezone: true }),
+  },
+  (t) => [index("kyc_submissions_user_idx").on(t.userId)],
+);
+
+/* ------------------------------------------------------------------ */
+/* Blocks                                                              */
+/* ------------------------------------------------------------------ */
+
+/** Users blocking creators (and creators blocking users). Persistent. */
+export const blocks = pgTable(
+  "blocks",
+  {
+    blockerId: text("blocker_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+    blockedId: text("blocked_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index("blocks_blocker_idx").on(t.blockerId)],
+);
+
+/* ------------------------------------------------------------------ */
+/* Chat                                                                */
+/* ------------------------------------------------------------------ */
+
+/** One thread per (user, creator) pair. */
+export const chatThreads = pgTable(
+  "chat_threads",
+  {
+    id: text("id").primaryKey(), // uuid
+    userId: text("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+    creatorId: text("creator_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+    lastMessageAt: timestamp("last_message_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index("chat_threads_user_idx").on(t.userId, t.lastMessageAt),
+    index("chat_threads_creator_idx").on(t.creatorId, t.lastMessageAt),
+  ],
+);
+
+export type ChatThread = typeof chatThreads.$inferSelect;
+
+/** Chat messages. Append-only. */
+export const chatMessages = pgTable(
+  "chat_messages",
+  {
+    id: text("id").primaryKey(), // uuid
+    threadId: text("thread_id").notNull().references(() => chatThreads.id, { onDelete: "cascade" }),
+    senderId: text("sender_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+    /** 'user' | 'creator' */
+    senderRole: text("sender_role").notNull(),
+    body: text("body").notNull(),
+    /** 'text' | 'gift' — gift messages carry a giftId. */
+    kind: text("kind").notNull().default("text"),
+    giftId: text("gift_id"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index("chat_messages_thread_idx").on(t.threadId, t.createdAt)],
+);
+
+export type ChatMessage = typeof chatMessages.$inferSelect;
+
+/* ------------------------------------------------------------------ */
+/* Calls                                                               */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Call sessions — persistent lifecycle: ringing -> active -> ended/missed/rejected.
+ * Billing: costPaise computed at end from durationSec * creator rate.
+ */
+export const callSessions = pgTable(
+  "call_sessions",
+  {
+    id: text("id").primaryKey(), // uuid
+    userId: text("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+    creatorId: text("creator_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+    /** Zego room id — both sides join this room. */
+    roomId: text("room_id").notNull(),
+    /** 'audio' | 'video' */
+    callType: text("call_type").notNull().default("video"),
+    /** 'ringing' | 'active' | 'ended' | 'rejected' | 'missed' | 'cancelled' */
+    status: text("status").notNull().default("ringing"),
+    /** Rate locked at call start, paise per minute. */
+    ratePaisePerMin: bigint("rate_paise_per_min", { mode: "number" }).notNull().default(0),
+    durationSec: integer("duration_sec").notNull().default(0),
+    /** Actual billed amount, paise. 0 until ended. */
+    costPaise: bigint("cost_paise", { mode: "number" }).notNull().default(0),
+    lastHeartbeatAt: timestamp("last_heartbeat_at", { withTimezone: true }),
+    startedAt: timestamp("started_at", { withTimezone: true }),
+    endedAt: timestamp("ended_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index("call_sessions_user_idx").on(t.userId, t.createdAt),
+    index("call_sessions_creator_idx").on(t.creatorId, t.createdAt),
+    index("call_sessions_status_idx").on(t.status, t.createdAt),
+  ],
+);
+
+export type CallSession = typeof callSessions.$inferSelect;
+
+/* ------------------------------------------------------------------ */
+/* Gifts                                                               */
+/* ------------------------------------------------------------------ */
+
+/** Gift catalog. */
+export const gifts = pgTable("gifts", {
+  id: text("id").primaryKey(),
+  name: text("name").notNull(),
+  /** Emoji/icon rendered client-side. */
+  emoji: text("emoji").notNull(),
+  /** Price in paise (debited from user wallet, credited to creator earnings). */
+  pricePaise: bigint("price_paise", { mode: "number" }).notNull(),
+  sortOrder: integer("sort_order").notNull().default(0),
+});
+
+/** Gift send ledger. Append-only. */
+export const giftTransactions = pgTable(
+  "gift_transactions",
+  {
+    id: text("id").primaryKey(), // uuid
+    fromUserId: text("from_user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+    toCreatorId: text("to_creator_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+    giftId: text("gift_id").notNull().references(() => gifts.id),
+    pricePaise: bigint("price_paise", { mode: "number" }).notNull(),
+    callSessionId: text("call_session_id"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index("gift_transactions_creator_idx").on(t.toCreatorId, t.createdAt)],
+);
+
+/* ------------------------------------------------------------------ */
+/* Withdrawals                                                         */
+/* ------------------------------------------------------------------ */
+
+/** Creator payout requests. */
+export const withdrawals = pgTable(
+  "withdrawals",
+  {
+    id: text("id").primaryKey(), // uuid
+    creatorId: text("creator_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+    amountPaise: bigint("amount_paise", { mode: "number" }).notNull(),
+    /** Snapshot of payout destination at request time. */
+    destination: text("destination").notNull(),
+    /** 'pending' | 'approved' | 'rejected' | 'paid' */
+    status: text("status").notNull().default("pending"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    processedAt: timestamp("processed_at", { withTimezone: true }),
+  },
+  (t) => [index("withdrawals_creator_idx").on(t.creatorId, t.createdAt)],
+);
