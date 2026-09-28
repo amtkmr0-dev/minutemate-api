@@ -1037,7 +1037,7 @@ export function registerCreatorRoutes(app: Express): void {
         // Guard the status so we don't clobber a session that settleCall
         // (or the creator) just claimed.
         await sql(
-          `UPDATE call_sessions SET status = 'missed', ended_at = now(), updated_at = now()
+          `UPDATE call_sessions SET status = 'missed', ended_at = now()
            WHERE id = $1 AND status = 'ringing'`,
           [s.id],
         );
@@ -1108,7 +1108,7 @@ export function registerCreatorRoutes(app: Express): void {
     // double-debit. Only the request whose UPDATE flips the status proceeds.
     const claimed = (await sql(
       `UPDATE call_sessions
-       SET status = 'settling', updated_at = now()
+       SET status = 'settling'
        WHERE id = $1 AND status IN ('ringing', 'active')
        RETURNING id, user_id, creator_id, rate_paise_per_min, started_at`,
       [sessionId],
