@@ -89,6 +89,45 @@ export function registerRoutes(app: Express): void {
     }
   });
 
+  /**
+   * Dev/testing — retrieve the current OTP for a phone number.
+   * Only for testing until SMS is configured. DELETE THIS before production launch.
+   */
+  app.get("/api/auth/dev-otp", async (req: Request, res: Response) => {
+    const secret = req.query.secret as string;
+    // Temporary testing secret — remove endpoint before production
+    if (secret !== "mm-test-2026") {
+      res.status(403).json({ error: "Forbidden" });
+      return;
+    }
+    const phone = normalizeIndianMobile(req.query.phone);
+    if (!phone) {
+      res.status(400).json({ error: "Invalid phone number" });
+      return;
+    }
+    try {
+      const { getDb } = await import("./db.js");
+      const { otps } = await import("./schema.js");
+      const { desc, eq } = await import("drizzle-orm");
+      const db = getDb();
+      const rows = await db
+        .select()
+        .from(otps)
+        .where(eq(otps.phone, phone))
+        .orderBy(desc(otps.createdAt))
+        .limit(1);
+      if (!rows.length) {
+        res.status(404).json({ error: "No OTP found for this number" });
+        return;
+      }
+      // We only store the hash, so re-issue a fresh OTP and return it.
+      const { otp } = await issueOtp(phone);
+      res.json({ success: true, phone, otp });
+    } catch (err) {
+      httpError(res, err, "Could not retrieve OTP");
+    }
+  });
+
   /** Verify the OTP and issue a session. Creates the user on first login. */
   app.post("/api/auth/verify-otp", async (req: Request, res: Response) => {
     const body = (req.body as { phone?: unknown; otp?: unknown } | undefined) ?? {};
