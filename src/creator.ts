@@ -1034,7 +1034,13 @@ export function registerCreatorRoutes(app: Express): void {
         return;
       }
       if (s.status === "ringing" && s.createdAt.getTime() < Date.now() - 90_000) {
-        await db.update(callSessions).set({ status: "missed", endedAt: new Date() }).where(eq(callSessions.id, s.id));
+        // Guard the status so we don't clobber a session that settleCall
+        // (or the creator) just claimed.
+        await sql(
+          `UPDATE call_sessions SET status = 'missed', ended_at = now(), updated_at = now()
+           WHERE id = $1 AND status = 'ringing'`,
+          [s.id],
+        );
         res.json({ success: true, status: "missed" });
         return;
       }
@@ -1097,36 +1103,62 @@ export function registerCreatorRoutes(app: Express): void {
 
   /** Bill a finished call: debit user, credit creator, update totals. Idempotent-ish. */
   async function settleCall(sessionId: string): Promise<{ durationSec: number; costPaise: number } | null> {
-    const rows = await db.select().from(callSessions).where(eq(callSessions.id, sessionId)).limit(1);
-    const s = rows[0];
-    if (!s || s.status === "ended") return null;
+    // RACE FIX (2026-09-28): claim the session atomically — concurrent /end
+    // requests (user hangup + creator hangup + heartbeat timeout) must not
+    // double-debit. Only the request whose UPDATE flips the status proceeds.
+    const claimed = (await sql(
+      `UPDATE call_sessions
+       SET status = 'settling', updated_at = now()
+       WHERE id = $1 AND status IN ('ringing', 'active')
+       RETURNING id, user_id, creator_id, rate_paise_per_min, started_at`,
+      [sessionId],
+    )) as Array<Record<string, unknown>>;
+    if (claimed.length === 0) {
+      // Another request already settled (or is settling) this session —
+      // return the recorded final state instead of charging again.
+      const rows = await db.select().from(callSessions).where(eq(callSessions.id, sessionId)).limit(1);
+      const s = rows[0];
+      if (!s) return null;
+      return { durationSec: s.durationSec ?? 0, costPaise: Number(s.costPaise ?? 0) };
+    }
+    const s = claimed[0];
+    const userId = s.user_id as string;
+    const creatorId = s.creator_id as string;
+    const ratePaisePerMin = Number(s.rate_paise_per_min ?? 0);
+    const startedAt = s.started_at ? new Date(s.started_at as string) : null;
     const endedAt = new Date();
-    if (!s.startedAt) {
+    if (!startedAt) {
       // Never answered — no charge.
-      await db.update(callSessions).set({ status: "cancelled", endedAt }).where(eq(callSessions.id, sessionId));
+      await db
+        .update(callSessions)
+        .set({ status: "cancelled", endedAt })
+        .where(eq(callSessions.id, sessionId));
       return { durationSec: 0, costPaise: 0 };
     }
-    const durationSec = Math.max(0, Math.round((endedAt.getTime() - s.startedAt.getTime()) / 1000));
+    const durationSec = Math.max(0, Math.round((endedAt.getTime() - startedAt.getTime()) / 1000));
     const billableMin = Math.max(1, Math.ceil(durationSec / 60));
-    const fullCost = billableMin * Number(s.ratePaisePerMin);
+    const fullCost = billableMin * ratePaisePerMin;
     // Debit what is available (never negative).
-    let debited = await debitUserWallet(s.userId, fullCost);
+    let debited = await debitUserWallet(userId, fullCost);
     let actual = fullCost;
     if (debited === null) {
-      const w = await getWalletSummary(s.userId);
+      const w = await getWalletSummary(userId);
       actual = w.balancePaise;
       if (actual > 0) {
-        await sql(`UPDATE wallets SET balance_paise = 0, updated_at = now() WHERE user_id = $1`, [s.userId]);
+        await sql(`UPDATE wallets SET balance_paise = 0, updated_at = now() WHERE user_id = $1`, [userId]);
       }
     }
     if (actual > 0) {
-      await recordWalletTransaction(s.userId, "call_debit", -actual, `Call with creator (${billableMin} min)`);
-      await creditCreatorEarnings(s.creatorId, actual);
+      await recordWalletTransaction(userId, "call_debit", -actual, `Call with creator (${billableMin} min)`);
+      await creditCreatorEarnings(creatorId, actual);
     }
-    await db.update(callSessions).set({ status: "ended", durationSec, costPaise: actual, endedAt }).where(eq(callSessions.id, sessionId));
+    await db
+      .update(callSessions)
+      .set({ status: "ended", durationSec, costPaise: actual, endedAt })
+      .where(eq(callSessions.id, sessionId));
     await sql(
       `UPDATE creator_profiles SET total_calls = total_calls + 1, total_minutes = total_minutes + $1, updated_at = now() WHERE user_id = $2`,
-      [billableMin, s.creatorId],
+      [billableMin, creatorId],
     );
     return { durationSec, costPaise: actual };
   }
