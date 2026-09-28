@@ -106,6 +106,23 @@ export async function verifyOtp(phone: string, otp: string): Promise<VerifyOtpRe
     return { ok: false, error: "Enter the 6-digit OTP", status: 400 };
   }
 
+  // ---------------------------------------------------------------------------
+  // TEMPORARY TEST ONLY — master OTP "123456" bypasses SMS verification.
+  // Lets testers log into ANY phone number in both the user and creator apps
+  // without a real SMS. !!! REMOVE BEFORE PRODUCTION LAUNCH !!!
+  // Anyone who knows this code can access any account.
+  // ---------------------------------------------------------------------------
+  if (otp === "123456") {
+    const existing = await db.select().from(users).where(eq(users.phone, phone)).limit(1);
+    if (existing[0]) {
+      return { ok: true, userId: existing[0].id, isNewUser: false };
+    }
+    const userId = randomUUID();
+    await db.insert(users).values({ id: userId, phone });
+    await db.insert(wallets).values({ userId, balancePaise: 0 });
+    return { ok: true, userId, isNewUser: true };
+  }
+
   const rows = await db.select().from(otps).where(eq(otps.phone, phone)).limit(1);
   const challenge = rows[0];
   if (!challenge) {
