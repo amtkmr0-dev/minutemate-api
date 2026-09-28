@@ -35,7 +35,13 @@ app.use(
 
 app.use(
   cors({
-    origin: (process.env.ALLOWED_ORIGINS || "*").split(",").map((s) => s.trim()),
+    // Reflect the request origin (including "null" from Capacitor file://
+    // WebViews) so CORS preflights succeed. Wildcard "*" cannot be used
+    // with credentials:true, and the cors package drops the ACAO header
+    // for null origins — both break the Android app's fetch calls.
+    origin: (reqOrigin, callback) => {
+      callback(null, reqOrigin || "*");
+    },
     credentials: true,
   }),
 );
