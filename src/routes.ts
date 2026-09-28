@@ -47,7 +47,6 @@ import {
   verifyAndCreditPayment,
 } from "./payments.js";
 import { getTransactionHistory, getWalletSummary } from "./wallet.js";
-import { db, sql } from "./db.js";
 import crypto from "node:crypto";
 
 function httpError(res: Response, err: unknown, fallback: string): void {
@@ -162,35 +161,6 @@ export function registerRoutes(app: Express): void {
       res.json({ success: true, phone, otp });
     } catch (err) {
       httpError(res, err, "Could not retrieve OTP");
-    }
-  });
-
-  /**
-   * TEMPORARY TEST ONLY — credit a user's wallet for integration testing.
-   * Guarded by the test secret. DELETE THIS before production launch.
-   */
-  app.post("/api/test/credit-wallet", authenticateToken, async (req: Request, res: Response) => {
-    const body = (req.body as { secret?: unknown; amountPaise?: unknown } | undefined) ?? {};
-    if (body.secret !== "mm-test-2026") {
-      res.status(403).json({ error: "Forbidden" });
-      return;
-    }
-    const amountPaise = Math.round(Number(body.amountPaise ?? 0));
-    if (!Number.isFinite(amountPaise) || amountPaise <= 0 || amountPaise > 1000000) {
-      res.status(400).json({ error: "Invalid amount." });
-      return;
-    }
-    try {
-      const userId = (req as AuthenticatedRequest).userId;
-      await sql(
-        `INSERT INTO wallets (user_id, balance_paise, updated_at)
-         VALUES ($1, $2, now())
-         ON CONFLICT (user_id) DO UPDATE SET balance_paise = wallets.balance_paise + $2, updated_at = now()`,
-        [userId, amountPaise],
-      );
-      res.json({ success: true, creditedPaise: amountPaise });
-    } catch (err) {
-      httpError(res, err, "Could not credit wallet.");
     }
   });
 
