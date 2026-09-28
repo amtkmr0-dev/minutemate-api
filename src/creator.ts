@@ -984,6 +984,7 @@ export function registerCreatorRoutes(app: Express): void {
       if (wallet.balancePaise < ratePaise) {
         res.status(402).json({
           error: `Insufficient balance. You need at least ₹${(ratePaise / 100).toFixed(0)} for 1 minute.`,
+          code: "INSUFFICIENT_BALANCE",
           insufficient: true,
           balance: wallet.balance,
         });
