@@ -417,7 +417,8 @@ export function registerCreatorRoutes(app: Express): void {
   /** One-shot onboarding: creates/updates the public profile. Trial mode: auto-approved. */
   app.post("/api/creator/onboarding", authenticateToken, async (req: Request, res: Response) => {
     const body = (req.body as Record<string, unknown> | undefined) ?? {};
-    const displayName = typeof body.displayName === "string" ? body.displayName.trim().slice(0, 40) : "";
+    // 2026-09-28: accept the app's field names as aliases (fullName -> displayName).
+    const displayName = (typeof body.displayName === "string" ? body.displayName : typeof body.fullName === "string" ? body.fullName : "").trim().slice(0, 40);
     if (displayName.length < 2) {
       res.status(400).json({ error: "Please enter your display name." });
       return;
@@ -454,6 +455,16 @@ export function registerCreatorRoutes(app: Express): void {
       };
       await db.insert(creatorProfiles).values(values).onConflictDoUpdate({ target: creatorProfiles.userId, set: values });
       await db.insert(creatorWallets).values({ userId }).onConflictDoNothing();
+      // 2026-09-28: onboarding also carries bank details — store them so the
+      // creator doesn't have to re-enter them in the dashboard.
+      const bankAcct = typeof body.bankAccountNumber === "string" ? body.bankAccountNumber.replace(/\s/g, "") : "";
+      const bankIfsc = typeof body.bankIfscCode === "string" ? body.bankIfscCode.trim().toUpperCase() : (typeof body.ifsc === "string" ? body.ifsc.trim().toUpperCase() : "");
+      if (bankAcct && /^[0-9]{9,18}$/.test(bankAcct) && /^[A-Z]{4}0[A-Z0-9]{6}$/.test(bankIfsc)) {
+        await db.insert(creatorBankDetails).values({ userId, accountNumber: bankAcct, ifsc: bankIfsc }).onConflictDoUpdate({
+          target: creatorBankDetails.userId,
+          set: { accountNumber: bankAcct, ifsc: bankIfsc, updatedAt: new Date() },
+        });
+      }
       const updated = await getUserById(userId);
       const profile = await db.select().from(creatorProfiles).where(eq(creatorProfiles.userId, userId)).limit(1);
       res.json({ success: true, profile: profile[0] && updated ? creatorFull(updated, profile[0]) : null });
