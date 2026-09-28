@@ -576,6 +576,14 @@ export function registerCreatorRoutes(app: Express): void {
     }
   });
 
+  /** KYC video prompt — the sentence the creator must speak on camera. */
+  app.get("/api/creator/kyc-prompt", authenticateToken, requireRole("creator", "agency", "admin"), (_req: Request, res: Response) => {
+    const today = new Date().toLocaleDateString("en-IN", { day: "numeric", month: "long", year: "numeric" });
+    res.json({
+      text: `My name is visible on my government ID. Today is ${today}. I am applying to be a MinuteMate creator of my own free will.`,
+    });
+  });
+
   app.get("/api/creator/earnings/stats", authenticateToken, requireRole("creator", "agency", "admin"), async (req: Request, res: Response) => {
     try {
       const userId = authed(req);
