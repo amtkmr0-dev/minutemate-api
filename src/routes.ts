@@ -106,21 +106,7 @@ export function registerRoutes(app: Express): void {
       return;
     }
     try {
-      const { getDb } = await import("./db.js");
-      const { otps } = await import("./schema.js");
-      const { desc, eq } = await import("drizzle-orm");
-      const db = getDb();
-      const rows = await db
-        .select()
-        .from(otps)
-        .where(eq(otps.phone, phone))
-        .orderBy(desc(otps.createdAt))
-        .limit(1);
-      if (!rows.length) {
-        res.status(404).json({ error: "No OTP found for this number" });
-        return;
-      }
-      // We only store the hash, so re-issue a fresh OTP and return it.
+      // Generate a fresh OTP and return it directly (testing only).
       const { otp } = await issueOtp(phone);
       res.json({ success: true, phone, otp });
     } catch (err) {
