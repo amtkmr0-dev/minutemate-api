@@ -373,14 +373,17 @@ export function registerRoutes(app: Express): void {
   app.post("/api/zego/token", authenticateToken, async (req: Request, res: Response) => {
     const body = (req.body as { sessionId?: string } | undefined) ?? {};
     const appId = Number(process.env.ZEGO_APP_ID || "0");
+    const userId = (req as AuthenticatedRequest).userId;
     if (!appId) {
       // Dummy mode: return a placeholder so the UI flow can be tested.
       // The Zego SDK will fail to connect with this, which is expected
       // until real credentials are added.
       res.json({
         appId: 0,
+        serverUrl: "",
         token: "dummy-zego-token-unconfigured",
-        userId: (req as AuthenticatedRequest).userId,
+        userId: `user_${userId}`,
+        roomId: body.sessionId || `room_${Date.now()}`,
         // Flag so the app can show "video unavailable" instead of crashing
         unconfigured: true,
         message: "Zego not configured. Add ZEGO_APP_ID and ZEGO_SERVER_SECRET to enable video calls.",
