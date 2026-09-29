@@ -547,21 +547,14 @@ export function registerRoutes(app: Express): void {
       res.status(400).json({ error: "appType must be 'user' or 'creator'." });
       return;
     }
-    // Auth: secret required, unless this is the one-time bootstrap (no secret
-    // configured AND no releases exist yet).
-    let isBootstrap = false;
+    // Auth: APP_ADMIN_SECRET must be configured; otherwise reject all
+    // publication attempts. (The temporary bootstrap path has been removed
+    // for security — releases are seeded only with a valid admin secret.)
     if (!adminSecret) {
-      try {
-        const existing = await sql(`SELECT COUNT(*)::int AS c FROM app_releases`, []);
-        if ((existing[0] as { c: number }).c === 0) {
-          isBootstrap = true;
-        }
-      } catch {
-        // Table may not exist yet — treat as bootstrap.
-        isBootstrap = true;
-      }
+      res.status(503).json({ error: "Release publication is not configured." });
+      return;
     }
-    if (!isBootstrap && body.adminSecret !== adminSecret) {
+    if (body.adminSecret !== adminSecret) {
       res.status(403).json({ error: "Forbidden." });
       return;
     }
