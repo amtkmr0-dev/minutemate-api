@@ -137,7 +137,13 @@ export function registerRoutes(app: Express): void {
         console.log(`[otp] ${phone} -> ${otp}`);
       }
       res.json({ success: true, message: "OTP sent successfully" });
-    } catch (err) {
+    } catch (err: any) {
+      // BUG 13 fix (2026-09-30): return 429 for cooldown violations so the
+      // client can show a "wait X seconds" message instead of a generic error.
+      if (err?.message?.includes("Please wait")) {
+        res.status(429).json({ error: err.message });
+        return;
+      }
       httpError(res, err, "Could not send OTP. Please try again.");
     }
   });
@@ -190,6 +196,92 @@ export function registerRoutes(app: Express): void {
         token: accessToken, // alias — some clients read `token`
         refreshToken,
         user: user ? publicUser(user) : { id: result.userId, phone },
+      });
+    } catch (err) {
+      httpError(res, err, "Could not verify OTP. Please try again.");
+    }
+  });
+
+  /**
+   * BUG 9 fix (2026-09-30): Admin OTP login endpoints. The admin web app
+   * calls POST /api/auth/admin/request-otp then POST /api/auth/admin/verify,
+   * but these endpoints did not exist — requests returned the SPA's index.html,
+   * breaking admin login entirely.
+   *
+   * Security: only users with role='admin' can request/verify. The response
+   * is intentionally generic to prevent admin phone enumeration.
+   */
+  app.post("/api/auth/admin/request-otp", async (req: Request, res: Response) => {
+    const body = (req.body as { mobile?: unknown } | undefined) ?? {};
+    const phone = normalizeIndianMobile(body.mobile);
+    if (!phone) {
+      res.status(400).json({ error: "Invalid phone number" });
+      return;
+    }
+    try {
+      // Check if this phone belongs to an admin. Use generic response
+      // to prevent enumeration.
+      const adminUser = await db.select().from(users).where(eq(users.phone, phone)).limit(1);
+      if (!adminUser[0] || adminUser[0].role !== "admin") {
+        // Generic response — don't reveal whether this is an admin number.
+        // Still issue a dummy delay to prevent timing attacks.
+        await new Promise((resolve) => setTimeout(resolve, 500));
+        res.json({ success: true, message: "If this is an admin number, an OTP has been sent." });
+        return;
+      }
+      const { otp } = await issueOtp(phone);
+      if (process.env.NODE_ENV !== "production") {
+        console.log(`[admin-otp] ${phone} -> ${otp}`);
+      }
+      res.json({ success: true, message: "OTP sent successfully" });
+    } catch (err: any) {
+      // BUG 13 fix (2026-09-30): 429 for cooldown.
+      if (err?.message?.includes("Please wait")) {
+        res.status(429).json({ error: err.message });
+        return;
+      }
+      httpError(res, err, "Could not send OTP. Please try again.");
+    }
+  });
+
+  app.post("/api/auth/admin/verify", async (req: Request, res: Response) => {
+    const body = (req.body as { mobile?: unknown; otp?: unknown } | undefined) ?? {};
+    const phone = normalizeIndianMobile(body.mobile);
+    if (!phone) {
+      res.status(400).json({ error: "Invalid phone number" });
+      return;
+    }
+    try {
+      // Verify the user is an admin BEFORE checking OTP.
+      const adminUser = await db.select().from(users).where(eq(users.phone, phone)).limit(1);
+      if (!adminUser[0] || adminUser[0].role !== "admin") {
+        res.status(403).json({ error: "Access denied." });
+        return;
+      }
+      const result = await verifyOtp(phone, String(body.otp ?? ""));
+      if (!result.ok) {
+        res.status(result.status).json({ error: result.error });
+        return;
+      }
+      // Double-check the verified user is still an admin (role could have changed).
+      const verifiedUser = await getUserById(result.userId);
+      if (!verifiedUser || verifiedUser.role !== "admin") {
+        res.status(403).json({ error: "Access denied." });
+        return;
+      }
+      const accessToken = signAccessToken(result.userId);
+      const refreshToken = await signRefreshToken(result.userId);
+      res.json({
+        success: true,
+        accessToken,
+        token: <redacted>
+        refreshToken,
+        user: {
+          id: verifiedUser.id,
+          phone: verifiedUser.phone,
+          name: verifiedUser.name,
+          role: verifiedUser.role,
+        },
       });
     } catch (err) {
       httpError(res, err, "Could not verify OTP. Please try again.");
