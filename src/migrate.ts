@@ -162,6 +162,21 @@ const DDL: string[] = [
     processed_at timestamp with time zone
   )`,
   `CREATE INDEX IF NOT EXISTS withdrawals_creator_idx ON withdrawals (creator_id, created_at)`,
+
+  // app_releases: in-app updater (2026-09-29)
+  `CREATE TABLE IF NOT EXISTS app_releases (
+    id text PRIMARY KEY,
+    app_type text NOT NULL,
+    version_code integer NOT NULL,
+    version_name text NOT NULL,
+    apk_data bytea NOT NULL,
+    apk_size_bytes integer NOT NULL,
+    apk_md5 text NOT NULL,
+    changelog text,
+    mandatory boolean NOT NULL DEFAULT false,
+    created_at timestamp with time zone NOT NULL DEFAULT now()
+  )`,
+  `CREATE INDEX IF NOT EXISTS app_releases_type_idx ON app_releases (app_type, version_code)`,
 ];
 
 const SEED_GIFTS: Array<[string, string, string, number, number]> = [
