@@ -169,7 +169,8 @@ const DDL: string[] = [
     app_type text NOT NULL,
     version_code integer NOT NULL,
     version_name text NOT NULL,
-    apk_data bytea NOT NULL,
+    apk_data bytea,
+    apk_url text,
     apk_size_bytes integer NOT NULL,
     apk_md5 text NOT NULL,
     changelog text,
@@ -177,6 +178,8 @@ const DDL: string[] = [
     created_at timestamp with time zone NOT NULL DEFAULT now()
   )`,
   `CREATE INDEX IF NOT EXISTS app_releases_type_idx ON app_releases (app_type, version_code)`,
+  `ALTER TABLE app_releases ALTER COLUMN apk_data DROP NOT NULL`,
+  `ALTER TABLE app_releases ADD COLUMN IF NOT EXISTS apk_url text`,
 ];
 
 const SEED_GIFTS: Array<[string, string, string, number, number]> = [
