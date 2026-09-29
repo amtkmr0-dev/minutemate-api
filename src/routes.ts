@@ -455,7 +455,7 @@ export function registerRoutes(app: Express): void {
     }
     try {
       const rows = await sql(
-        `SELECT version_code, version_name, apk_size_bytes, apk_md5, changelog, mandatory, created_at
+        `SELECT version_code, version_name, apk_size_bytes, apk_md5, apk_url, changelog, mandatory, created_at
          FROM app_releases WHERE app_type = $1 ORDER BY version_code DESC LIMIT 1`,
         [appType],
       );
@@ -470,6 +470,7 @@ export function registerRoutes(app: Express): void {
         versionName: r.version_name,
         apkSizeBytes: r.apk_size_bytes,
         apkMd5: r.apk_md5,
+        apkUrl: r.apk_url || null,
         changelog: r.changelog,
         mandatory: r.mandatory,
         publishedAt: r.created_at,
@@ -494,7 +495,7 @@ export function registerRoutes(app: Express): void {
     }
     try {
       const rows = await sql(
-        `SELECT version_name, apk_data, apk_size_bytes, apk_md5
+        `SELECT version_name, apk_data, apk_url, apk_size_bytes, apk_md5
          FROM app_releases WHERE app_type = $1 ORDER BY version_code DESC LIMIT 1`,
         [appType],
       );
@@ -503,7 +504,16 @@ export function registerRoutes(app: Express): void {
         return;
       }
       const r = rows[0] as Record<string, unknown>;
+      // URL-based release: redirect to the hosted APK.
+      if (r.apk_url) {
+        res.redirect(302, String(r.apk_url));
+        return;
+      }
       const apk = r.apk_data as Buffer;
+      if (!apk) {
+        res.status(404).json({ error: "No APK available for this release." });
+        return;
+      }
       res.setHeader("Content-Type", "application/vnd.android.package-archive");
       res.setHeader(
         "Content-Disposition",
@@ -519,13 +529,14 @@ export function registerRoutes(app: Express): void {
 
   /**
    * Publish a new app release (admin only). Body: { adminSecret, appType,
-   * versionCode, versionName, apkBase64, changelog?, mandatory? }.
-   * The admin secret is the APP_ADMIN_SECRET env var.
+   * versionCode, versionName, apkBase64|apkUrl, apkSizeBytes?, apkMd5?,
+   * changelog?, mandatory? }.
    *
-   * ONE-TIME BOOTSTRAP (2026-09-29): if APP_ADMIN_SECRET is not set AND no
-   * releases exist yet, the first publish is allowed without a secret so the
-   * initial releases can be seeded. After the first release exists, the
-   * secret is mandatory. Remove this bootstrap once the secret is configured.
+   * Two modes:
+   * - apkBase64: binary uploaded inline (for small files; Neon HTTP has
+   *   payload limits, so large APKs should use apkUrl instead).
+   * - apkUrl: direct download URL (e.g. GitHub release asset). Requires
+   *   apkSizeBytes and apkMd5 for the client to verify the download.
    */
   const adminJson = express.json({ limit: "32mb" });
   app.post("/api/admin/app-release", adminJson, async (req: Request, res: Response) => {
@@ -556,9 +567,49 @@ export function registerRoutes(app: Express): void {
     }
     const versionCode = Number(body.versionCode);
     const versionName = String(body.versionName || "");
+    if (!Number.isInteger(versionCode) || versionCode <= 0 || !versionName) {
+      res.status(400).json({ error: "versionCode and versionName are required." });
+      return;
+    }
+
+    // Mode 1: URL-based (preferred for large APKs).
+    const apkUrl = String(body.apkUrl || "");
+    if (apkUrl) {
+      const apkSizeBytes = Number(body.apkSizeBytes);
+      const apkMd5 = String(body.apkMd5 || "");
+      if (!Number.isInteger(apkSizeBytes) || apkSizeBytes <= 0 || !/^[a-f0-9]{32}$/i.test(apkMd5)) {
+        res.status(400).json({ error: "apkUrl mode requires apkSizeBytes and apkMd5." });
+        return;
+      }
+      const id = crypto.randomUUID();
+      try {
+        await sql(
+          `INSERT INTO app_releases
+             (id, app_type, version_code, version_name, apk_data, apk_url, apk_size_bytes, apk_md5, changelog, mandatory)
+           VALUES ($1, $2, $3, $4, NULL, $5, $6, $7, $8, $9)`,
+          [
+            id,
+            appType,
+            versionCode,
+            versionName,
+            apkUrl,
+            apkSizeBytes,
+            apkMd5.toLowerCase(),
+            body.changelog ? String(body.changelog) : null,
+            body.mandatory === true,
+          ],
+        );
+        res.json({ success: true, id, appType, versionCode, versionName, apkUrl, apkSizeBytes, apkMd5 });
+      } catch (err) {
+        httpError(res, err, "Could not publish release.");
+      }
+      return;
+    }
+
+    // Mode 2: inline base64 (small files only).
     const apkBase64 = String(body.apkBase64 || "");
-    if (!Number.isInteger(versionCode) || versionCode <= 0 || !versionName || !apkBase64) {
-      res.status(400).json({ error: "versionCode, versionName, and apkBase64 are required." });
+    if (!apkBase64) {
+      res.status(400).json({ error: "apkBase64 or apkUrl is required." });
       return;
     }
     let apk: Buffer;
@@ -578,8 +629,8 @@ export function registerRoutes(app: Express): void {
     try {
       await sql(
         `INSERT INTO app_releases
-           (id, app_type, version_code, version_name, apk_data, apk_size_bytes, apk_md5, changelog, mandatory)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+           (id, app_type, version_code, version_name, apk_data, apk_url, apk_size_bytes, apk_md5, changelog, mandatory)
+         VALUES ($1, $2, $3, $4, $5, NULL, $6, $7, $8, $9)`,
         [
           id,
           appType,
