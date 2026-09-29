@@ -388,7 +388,10 @@ export const appReleases = pgTable(
     appType: text("app_type").notNull(),
     versionCode: integer("version_code").notNull(),
     versionName: text("version_name").notNull(),
-    apkData: bytea("apk_data").notNull(),
+    /** APK binary (bytea). Null when apkUrl is used instead. */
+    apkData: bytea("apk_data"),
+    /** Direct download URL (e.g. GitHub release asset). Used when apkData is null. */
+    apkUrl: text("apk_url"),
     apkSizeBytes: integer("apk_size_bytes").notNull(),
     /** MD5 hex of the APK — client verifies after download. */
     apkMd5: text("apk_md5").notNull(),
