@@ -1264,7 +1264,9 @@ export function registerCreatorRoutes(app: Express): void {
   // ---------------------------------------------------------- uploads
   // Trial mode: validated data URLs. Move to object storage before scale.
   app.post("/api/upload/avatar", authenticateToken, async (req: Request, res: Response) => {
-    const dataUrl = (req.body as { dataUrl?: unknown } | undefined)?.dataUrl;
+    const body = (req.body as { dataUrl?: unknown; imageBase64?: unknown } | undefined) ?? {};
+    // Accept both field names: older clients send imageBase64, canonical is dataUrl.
+    const dataUrl = body.dataUrl ?? body.imageBase64;
     const check = validateDataUrl(dataUrl, { imagesOnly: true, maxBytes: 5 * 1024 * 1024 });
     if (typeof check === "string") {
       res.status(400).json({ error: check });
