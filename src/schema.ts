@@ -6,7 +6,14 @@
  * response boundary, because the mobile client formats balances as ₹.
  */
 
-import { pgTable, text, bigint, timestamp, boolean, index, integer } from "drizzle-orm/pg-core";
+import { pgTable, text, bigint, timestamp, boolean, index, integer, customType } from "drizzle-orm/pg-core";
+
+/** Postgres bytea column type for Drizzle (used for APK binaries). */
+const bytea = customType<{ data: Buffer; driverData: Buffer }>({
+  dataType() {
+    return "bytea";
+  },
+});
 
 /** App users. One row per verified phone number. */
 export const users = pgTable("users", {
@@ -362,3 +369,35 @@ export const withdrawals = pgTable(
   },
   (t) => [index("withdrawals_creator_idx").on(t.creatorId, t.createdAt)],
 );
+
+/* ------------------------------------------------------------------ */
+/* App releases (in-app updater)                                       */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Published APK releases for the in-app updater. One row per published
+ * version; the latest row per app_type is what clients are offered.
+ * The APK binary lives in apk_data (bytea) so the backend can serve it
+ * directly without depending on Drive sharing permissions.
+ */
+export const appReleases = pgTable(
+  "app_releases",
+  {
+    id: text("id").primaryKey(), // uuid
+    /** 'user' | 'creator' */
+    appType: text("app_type").notNull(),
+    versionCode: integer("version_code").notNull(),
+    versionName: text("version_name").notNull(),
+    apkData: bytea("apk_data").notNull(),
+    apkSizeBytes: integer("apk_size_bytes").notNull(),
+    /** MD5 hex of the APK — client verifies after download. */
+    apkMd5: text("apk_md5").notNull(),
+    changelog: text("changelog"),
+    /** When true the client should block until the user updates. */
+    mandatory: boolean("mandatory").notNull().default(false),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index("app_releases_type_idx").on(t.appType, t.versionCode)],
+);
+
+export type AppRelease = typeof appReleases.$inferSelect;
