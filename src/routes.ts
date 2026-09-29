@@ -26,7 +26,9 @@
 
 import type { Express, Request, Response } from "express";
 import express from "express";
-import { sql } from "./db.js";
+import { eq } from "drizzle-orm";
+import { db, sql } from "./db.js";
+import { users } from "./schema.js";
 import {
   authenticateToken,
   issueOtp,
@@ -274,7 +276,7 @@ export function registerRoutes(app: Express): void {
       res.json({
         success: true,
         accessToken,
-        token: <redacted>
+        token: accessToken,
         refreshToken,
         user: {
           id: verifiedUser.id,
