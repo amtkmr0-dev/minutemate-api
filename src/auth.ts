@@ -82,6 +82,19 @@ function sha256Hex(value: string): string {
  * caller can send it via SMS; only the hash is persisted.
  */
 export async function issueOtp(phone: string): Promise<{ otp: string; expiresAt: Date }> {
+  // BUG 13 fix (2026-09-30): enforce a resend cooldown. The old code allowed
+  // unlimited rapid resends, which resets the OTP each time and enables abuse.
+  const COOLDOWN_MS = 30 * 1000; // 30 seconds between OTP sends
+  const existing = await db.select().from(otps).where(eq(otps.phone, phone)).limit(1);
+  if (existing[0]) {
+    const sentAt = existing[0].createdAt.getTime();
+    const elapsed = Date.now() - sentAt;
+    if (elapsed < COOLDOWN_MS) {
+      const waitSec = Math.ceil((COOLDOWN_MS - elapsed) / 1000);
+      throw new Error(`Please wait ${waitSec} seconds before requesting a new OTP.`);
+    }
+  }
+
   const otp = String(randomInt(100000, 1000000)); // 6 digits, no leading zero
   const expiresAt = new Date(Date.now() + OTP_TTL_MS);
 
