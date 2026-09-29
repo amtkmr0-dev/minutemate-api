@@ -414,7 +414,13 @@ export function registerRoutes(app: Express): void {
         stream_id_list: null,
       });
       const token = generateZegoToken04(appId, zegoUserId, serverSecret, 3600, payload);
-      res.json({ appId, serverUrl: "", token, userId: zegoUserId, roomId, expiresIn: 3600 });
+      // 2026-09-29: serverUrl was hardcoded to "" which broke all Zego media
+      // connections (user saw "Couldn't Start Call", creator saw "Demo call mode").
+      // Use ZEGO_SERVER_URL from env, falling back to the standard ZegoCloud
+      // WebSocket pattern for this AppID.
+      const serverUrl =
+        process.env.ZEGO_SERVER_URL || `wss://webliveroom${appId}-api.zegocloud.com/ws`;
+      res.json({ appId, serverUrl, token, userId: zegoUserId, roomId, expiresIn: 3600 });
     } catch (err) {
       httpError(res, err, "Could not generate call token.");
     }
