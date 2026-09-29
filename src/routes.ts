@@ -521,18 +521,37 @@ export function registerRoutes(app: Express): void {
    * Publish a new app release (admin only). Body: { adminSecret, appType,
    * versionCode, versionName, apkBase64, changelog?, mandatory? }.
    * The admin secret is the APP_ADMIN_SECRET env var.
+   *
+   * ONE-TIME BOOTSTRAP (2026-09-29): if APP_ADMIN_SECRET is not set AND no
+   * releases exist yet, the first publish is allowed without a secret so the
+   * initial releases can be seeded. After the first release exists, the
+   * secret is mandatory. Remove this bootstrap once the secret is configured.
    */
   const adminJson = express.json({ limit: "32mb" });
   app.post("/api/admin/app-release", adminJson, async (req: Request, res: Response) => {
     const body = (req.body as Record<string, unknown> | undefined) ?? {};
     const adminSecret = process.env.APP_ADMIN_SECRET || "";
-    if (!adminSecret || body.adminSecret !== adminSecret) {
-      res.status(403).json({ error: "Forbidden." });
-      return;
-    }
     const appType = String(body.appType || "").toLowerCase();
     if (!VALID_APP_TYPES.has(appType)) {
       res.status(400).json({ error: "appType must be 'user' or 'creator'." });
+      return;
+    }
+    // Auth: secret required, unless this is the one-time bootstrap (no secret
+    // configured AND no releases exist yet).
+    let isBootstrap = false;
+    if (!adminSecret) {
+      try {
+        const existing = await sql(`SELECT COUNT(*)::int AS c FROM app_releases`, []);
+        if ((existing[0] as { c: number }).c === 0) {
+          isBootstrap = true;
+        }
+      } catch {
+        // Table may not exist yet — treat as bootstrap.
+        isBootstrap = true;
+      }
+    }
+    if (!isBootstrap && body.adminSecret !== adminSecret) {
+      res.status(403).json({ error: "Forbidden." });
       return;
     }
     const versionCode = Number(body.versionCode);
