@@ -25,6 +25,8 @@
  */
 
 import type { Express, Request, Response } from "express";
+import express from "express";
+import { sql } from "./db.js";
 import {
   authenticateToken,
   issueOtp,
@@ -427,4 +429,159 @@ export function registerRoutes(app: Express): void {
   });
 
   /* Chat threads and blocks are implemented persistently in creator.ts. */
+
+  // ------------------------------------------------------------ app updater
+  // In-app update mechanism (2026-09-29): the mobile apps poll
+  // GET /api/app/version?app=user|creator, compare versionCode with the
+  // installed build, and download the APK from /api/app/download.
+  // Releases are published via POST /api/admin/app-release (admin secret).
+
+  const VALID_APP_TYPES = new Set(["user", "creator"]);
+
+  function resolveAppType(req: Request): string | null {
+    const t = String((req.query as { app?: string }).app || "").toLowerCase();
+    return VALID_APP_TYPES.has(t) ? t : null;
+  }
+
+  /**
+   * Latest release metadata for an app. Public — the client checks this on
+   * launch before deciding whether to show the "Update available" banner.
+   */
+  app.get("/api/app/version", async (req: Request, res: Response) => {
+    const appType = resolveAppType(req);
+    if (!appType) {
+      res.status(400).json({ error: "Query param 'app' must be 'user' or 'creator'." });
+      return;
+    }
+    try {
+      const rows = await sql(
+        `SELECT version_code, version_name, apk_size_bytes, apk_md5, changelog, mandatory, created_at
+         FROM app_releases WHERE app_type = $1 ORDER BY version_code DESC LIMIT 1`,
+        [appType],
+      );
+      if (rows.length === 0) {
+        res.status(404).json({ error: "No releases published for this app yet." });
+        return;
+      }
+      const r = rows[0] as Record<string, unknown>;
+      res.json({
+        appType,
+        versionCode: r.version_code,
+        versionName: r.version_name,
+        apkSizeBytes: r.apk_size_bytes,
+        apkMd5: r.apk_md5,
+        changelog: r.changelog,
+        mandatory: r.mandatory,
+        publishedAt: r.created_at,
+        downloadUrl: `/api/app/download?app=${appType}`,
+      });
+    } catch (err) {
+      httpError(res, err, "Could not load release info.");
+    }
+  });
+
+  /**
+   * Download the latest APK for an app. Authenticated — the app always has
+   * a session when checking for updates.
+   */
+  app.get("/api/app/download", authenticateToken, async (req: Request, res: Response) => {
+    const appType = resolveAppType(req);
+    if (!appType) {
+      res.status(400).json({ error: "Query param 'app' must be 'user' or 'creator'." });
+      return;
+    }
+    try {
+      const rows = await sql(
+        `SELECT version_name, apk_data, apk_size_bytes, apk_md5
+         FROM app_releases WHERE app_type = $1 ORDER BY version_code DESC LIMIT 1`,
+        [appType],
+      );
+      if (rows.length === 0) {
+        res.status(404).json({ error: "No releases published for this app yet." });
+        return;
+      }
+      const r = rows[0] as Record<string, unknown>;
+      const apk = r.apk_data as Buffer;
+      res.setHeader("Content-Type", "application/vnd.android.package-archive");
+      res.setHeader(
+        "Content-Disposition",
+        `attachment; filename="MinuteMate-${appType}-${r.version_name}.apk"`,
+      );
+      res.setHeader("Content-Length", String(r.apk_size_bytes));
+      res.setHeader("X-APK-MD5", String(r.apk_md5));
+      res.send(apk);
+    } catch (err) {
+      httpError(res, err, "Could not download release.");
+    }
+  });
+
+  /**
+   * Publish a new app release (admin only). Body: { adminSecret, appType,
+   * versionCode, versionName, apkBase64, changelog?, mandatory? }.
+   * The admin secret is the APP_ADMIN_SECRET env var.
+   */
+  const adminJson = express.json({ limit: "32mb" });
+  app.post("/api/admin/app-release", adminJson, async (req: Request, res: Response) => {
+    const body = (req.body as Record<string, unknown> | undefined) ?? {};
+    const adminSecret = process.env.APP_ADMIN_SECRET || "";
+    if (!adminSecret || body.adminSecret !== adminSecret) {
+      res.status(403).json({ error: "Forbidden." });
+      return;
+    }
+    const appType = String(body.appType || "").toLowerCase();
+    if (!VALID_APP_TYPES.has(appType)) {
+      res.status(400).json({ error: "appType must be 'user' or 'creator'." });
+      return;
+    }
+    const versionCode = Number(body.versionCode);
+    const versionName = String(body.versionName || "");
+    const apkBase64 = String(body.apkBase64 || "");
+    if (!Number.isInteger(versionCode) || versionCode <= 0 || !versionName || !apkBase64) {
+      res.status(400).json({ error: "versionCode, versionName, and apkBase64 are required." });
+      return;
+    }
+    let apk: Buffer;
+    try {
+      apk = Buffer.from(apkBase64, "base64");
+    } catch {
+      res.status(400).json({ error: "apkBase64 is not valid base64." });
+      return;
+    }
+    // Sanity: APK files start with the ZIP magic "PK".
+    if (apk.length < 4 || apk[0] !== 0x50 || apk[1] !== 0x4b) {
+      res.status(400).json({ error: "Uploaded file is not a valid APK (missing ZIP header)." });
+      return;
+    }
+    const md5 = crypto.createHash("md5").update(apk).digest("hex");
+    const id = crypto.randomUUID();
+    try {
+      await sql(
+        `INSERT INTO app_releases
+           (id, app_type, version_code, version_name, apk_data, apk_size_bytes, apk_md5, changelog, mandatory)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+        [
+          id,
+          appType,
+          versionCode,
+          versionName,
+          apk,
+          apk.length,
+          md5,
+          body.changelog ? String(body.changelog) : null,
+          body.mandatory === true,
+        ],
+      );
+      res.json({
+        success: true,
+        id,
+        appType,
+        versionCode,
+        versionName,
+        apkSizeBytes: apk.length,
+        apkMd5: md5,
+      });
+    } catch (err) {
+      httpError(res, err, "Could not publish release.");
+    }
+  });
 }
