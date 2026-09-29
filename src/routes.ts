@@ -481,10 +481,12 @@ export function registerRoutes(app: Express): void {
   });
 
   /**
-   * Download the latest APK for an app. Authenticated — the app always has
-   * a session when checking for updates.
+   * Download the latest APK for an app. Public — the APK is the app binary
+   * itself (destined for the Play Store), not sensitive data. The in-app
+   * updater opens this URL in the system browser, which cannot carry the
+   * user's auth token.
    */
-  app.get("/api/app/download", authenticateToken, async (req: Request, res: Response) => {
+  app.get("/api/app/download", async (req: Request, res: Response) => {
     const appType = resolveAppType(req);
     if (!appType) {
       res.status(400).json({ error: "Query param 'app' must be 'user' or 'creator'." });
