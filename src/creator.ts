@@ -127,6 +127,11 @@ function creatorFull(user: UserRow, p: ProfileRow) {
     hobbies: safeJsonArray(p.hobbies),
     totalMinutes: p.totalMinutes,
     verificationStatus: p.verificationStatus,
+    // BUG 11 fix (2026-09-30): the client expects `approvalStatus` from
+    // GET /api/creator/profile. Alias it to verificationStatus (the
+    // server-owned approval state) so the client stops fabricating it
+    // from localStorage.
+    approvalStatus: p.verificationStatus,
   };
 }
 
@@ -255,7 +260,12 @@ export function registerCreatorRoutes(app: Express): void {
     try {
       await issueOtp(phone);
       res.json({ success: true, message: "OTP sent successfully" });
-    } catch (err) {
+    } catch (err: any) {
+      // BUG 13 fix (2026-09-30): 429 for cooldown.
+      if (err?.message?.includes("Please wait")) {
+        res.status(429).json({ error: err.message });
+        return;
+      }
       httpError(res, err, "Could not send OTP. Please try again.");
     }
   });
@@ -282,6 +292,9 @@ export function registerCreatorRoutes(app: Express): void {
       const accessToken = signAccessToken(result.userId);
       const refreshToken = await signRefreshToken(result.userId);
       const user = await getUserById(result.userId);
+      // BUG 11 fix (2026-09-30): include the creator profile with the
+      // server-owned approvalStatus so the client doesn't fabricate it.
+      const creatorProfile = await db.select().from(creatorProfiles).where(eq(creatorProfiles.userId, result.userId)).limit(1);
       res.json({
         success: true,
         isNewUser: result.isNewUser,
@@ -291,6 +304,7 @@ export function registerCreatorRoutes(app: Express): void {
         user: user
           ? { id: user.id, phone: user.phone, name: user.name, email: user.email, role: user.role, avatarUrl: user.avatarUrl }
           : { id: result.userId, phone, role: "creator" },
+        profile: creatorProfile[0] && user ? creatorFull(user, creatorProfile[0]) : null,
       });
     } catch (err) {
       httpError(res, err, "Could not verify OTP. Please try again.");
@@ -407,8 +421,77 @@ export function registerCreatorRoutes(app: Express): void {
         .values({ userId, displayName: user.name || `Creator ${user.phone.slice(-4)}` })
         .onConflictDoNothing();
       await db.insert(creatorWallets).values({ userId }).onConflictDoNothing();
+
+      // BUG 10 fix (2026-09-30): persist onboarding bank/KYC/referral data.
+      // The old code discarded these fields — bank details, Aadhaar/PAN numbers,
+      // and referral codes were silently lost.
+      const body = (req.body as Record<string, unknown> | undefined) ?? {};
+
+      // Bank details → creator_bank_details table
+      const bankAccountName = typeof body.bankAccountName === "string" ? body.bankAccountName.trim().slice(0, 80) : "";
+      const bankAccountNumber = typeof body.bankAccountNumber === "string" ? body.bankAccountNumber.replace(/\s/g, "") : "";
+      const bankIfscCode = typeof body.bankIfscCode === "string" ? body.bankIfscCode.trim().toUpperCase() : "";
+      if (bankAccountNumber && bankIfscCode) {
+        await db
+          .insert(creatorBankDetails)
+          .values({
+            userId,
+            accountHolder: bankAccountName || null,
+            accountNumber: bankAccountNumber,
+            ifsc: bankIfscCode,
+          })
+          .onConflictDoUpdate({
+            target: creatorBankDetails.userId,
+            set: {
+              accountHolder: bankAccountName || null,
+              accountNumber: bankAccountNumber,
+              ifsc: bankIfscCode,
+              updatedAt: new Date(),
+            },
+          });
+      }
+
+      // Aadhaar/PAN numbers → stored as KYC submissions with the number.
+      // Note: these are sensitive; in production they should be encrypted.
+      const aadharNumber = typeof body.aadharNumber === "string" ? body.aadharNumber.replace(/\s/g, "") : "";
+      const panNumber = typeof body.panNumber === "string" ? body.panNumber.trim().toUpperCase() : "";
+      if (aadharNumber) {
+        await db.insert(kycSubmissions).values({
+          id: randomUUID(),
+          userId,
+          docType: "aadhaar",
+          docUrl: `number:${aadharNumber}`, // Number only, no document yet
+        });
+      }
+      if (panNumber) {
+        await db.insert(kycSubmissions).values({
+          id: randomUUID(),
+          userId,
+          docType: "pan",
+          docUrl: `number:${panNumber}`, // Number only, no document yet
+        });
+      }
+
+      // Referral code → stored in user record (add column if needed)
+      // For now, log it; the referral system needs a proper schema.
+      const referralCode = typeof body.referralCode === "string" ? body.referralCode.trim().toUpperCase() : "";
+      if (referralCode) {
+        console.log(`[referral] User ${userId} used referral code: ${referralCode}`);
+        // TODO: implement referral tracking with proper schema
+      }
+
       const profile = await db.select().from(creatorProfiles).where(eq(creatorProfiles.userId, userId)).limit(1);
-      res.json({ success: true, profile: profile[0] ? creatorFull(user, profile[0]) : null });
+      // BUG 14 fix (2026-09-30): return the contract the client expects:
+      // { success, status, otpSent, profile }. The old code returned only
+      // { success, profile }, so the client defaulted status to "pending"
+      // and never knew if an OTP was sent.
+      const fullProfile = profile[0] ? creatorFull(user, profile[0]) : null;
+      res.json({
+        success: true,
+        status: fullProfile?.approvalStatus || fullProfile?.verificationStatus || "pending",
+        otpSent: false, // OTP is sent via separate /send-otp call
+        profile: fullProfile,
+      });
     } catch (err) {
       httpError(res, err, "Could not start creator application.");
     }
@@ -1061,20 +1144,49 @@ export function registerCreatorRoutes(app: Express): void {
            WHERE id = $1 AND status = 'ringing'`,
           [s.id],
         );
-        res.json({ success: true, status: "missed" });
+        res.json({ success: true, status: "missed", minutesBilled: 0, remainingSeconds: 0, terminate: true });
         return;
       }
       if (s.status === "active") {
-        // Safety: end the call server-side if the user's balance ran dry.
+        // BUG 6 fix (2026-09-30): return the billing contract the client
+        // expects: { minutesBilled, remainingSeconds, terminate }. The old
+        // code only returned { success, status }, so the client's
+        // zero-balance termination never worked.
         const wallet = await getWalletSummary(s.userId);
-        if (wallet.balancePaise < Number(s.ratePaisePerMin)) {
+        const ratePaise = Number(s.ratePaisePerMin);
+        const startedAtMs = s.startedAt ? s.startedAt.getTime() : Date.now();
+        const elapsedSec = Math.max(0, Math.floor((Date.now() - startedAtMs) / 1000));
+        const minutesBilled = Math.floor(elapsedSec / 60);
+        // Remaining talk time from current balance, minus already-elapsed.
+        const remainingSeconds = ratePaise > 0
+          ? Math.max(0, Math.floor((wallet.balancePaise / ratePaise) * 60) - elapsedSec)
+          : 0;
+        // Safety: end the call server-side if the user's balance ran dry.
+        if (wallet.balancePaise < ratePaise) {
           await settleCall(s.id);
-          res.json({ success: true, status: "ended", reason: "insufficient_balance" });
+          res.json({
+            success: true,
+            status: "ended",
+            reason: "insufficient_balance",
+            minutesBilled,
+            remainingSeconds: 0,
+            terminate: true,
+          });
           return;
         }
+        await db.update(callSessions).set({ lastHeartbeatAt: new Date() }).where(eq(callSessions.id, s.id));
+        res.json({
+          success: true,
+          status: s.status,
+          minutesBilled,
+          remainingSeconds,
+          terminate: false,
+        });
+        return;
       }
       await db.update(callSessions).set({ lastHeartbeatAt: new Date() }).where(eq(callSessions.id, s.id));
-      res.json({ success: true, status: s.status });
+      // Non-active sessions: nothing billable, signal termination.
+      res.json({ success: true, status: s.status, minutesBilled: 0, remainingSeconds: 0, terminate: true });
     } catch (err) {
       httpError(res, err, "Heartbeat failed.");
     }
