@@ -5,3 +5,4 @@ dist/
 drizzle/
 *.log
 .DS_Store
+.admin-secret
