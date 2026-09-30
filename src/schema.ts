@@ -27,6 +27,10 @@ export const users = pgTable("users", {
   status: text("status").notNull().default("active"),
   /** Profile picture (data URL, trial mode). */
   avatarUrl: text("avatar_url"),
+  /** Unique public member ID, e.g. "MM100001" — for admin dashboard + support. */
+  memberId: text("member_id").unique(),
+  /** Auto-generated display name, e.g. "Happy Panda". */
+  displayName: text("display_name"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
