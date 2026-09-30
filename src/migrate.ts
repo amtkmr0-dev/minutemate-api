@@ -16,6 +16,8 @@ const DDL: string[] = [
   `ALTER TABLE users ADD COLUMN IF NOT EXISTS role text NOT NULL DEFAULT 'user'`,
   `ALTER TABLE users ADD COLUMN IF NOT EXISTS status text NOT NULL DEFAULT 'active'`,
   `ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_url text`,
+  `ALTER TABLE users ADD COLUMN IF NOT EXISTS member_id text UNIQUE`,
+  `ALTER TABLE users ADD COLUMN IF NOT EXISTS display_name text`,
 
   // creator profiles
   `CREATE TABLE IF NOT EXISTS creator_profiles (
