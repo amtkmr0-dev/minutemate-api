@@ -691,8 +691,9 @@ export function registerCreatorRoutes(app: Express): void {
         .orderBy(desc(giftTransactions.createdAt))
         .limit(20);
       const recentCalls = await db
-        .select()
+        .select({ call: callSessions, user: users })
         .from(callSessions)
+        .innerJoin(users, eq(users.id, callSessions.userId))
         .where(and(eq(callSessions.creatorId, userId), eq(callSessions.status, "ended")))
         .orderBy(desc(callSessions.createdAt))
         .limit(20);
@@ -705,7 +706,7 @@ export function registerCreatorRoutes(app: Express): void {
         totalMinutes: profile[0]?.totalMinutes ?? 0,
         rating: profile[0] ? Number(profile[0].rating) / 10 : 0,
         recentGifts: recentGifts.map((r) => ({ id: r.gift.id, amount: Number(r.gift.pricePaise) / 100, from: r.user.name || "User", createdAt: r.gift.createdAt.toISOString() })),
-        recentCalls: recentCalls.map((c) => ({ id: c.id, durationSec: c.durationSec, earnings: Number(c.costPaise) / 100, createdAt: c.createdAt.toISOString() })),
+        recentCalls: recentCalls.map((r) => ({ id: r.call.id, durationSec: r.call.durationSec, earnings: Number(r.call.costPaise) / 100, createdAt: r.call.createdAt.toISOString(), userName: r.user.displayName || r.user.name || "User", callType: r.call.callType })),
       });
     } catch (err) {
       httpError(res, err, "Could not load earnings.");
