@@ -995,4 +995,170 @@ export function registerRoutes(app: Express): void {
       httpError(res, err, "Could not load calls.");
     }
   });
+
+  /**
+   * GET /api/admin/dashboard/approvals?adminSecret=XXX&limit&offset
+   * Creators waiting for verification approval (verification_status='pending').
+   */
+  app.get("/api/admin/dashboard/approvals", async (req: Request, res: Response) => {
+    if (!checkDashboardAuth(req, res)) return;
+    try {
+      const limit = Math.min(Math.max(Number(req.query.limit) || 50, 1), 200);
+      const offset = Math.max(Number(req.query.offset) || 0, 0);
+
+      const countRows = await sql`SELECT COUNT(*)::int AS c FROM creator_profiles WHERE verification_status = 'pending'`;
+      const total = countRows[0].c;
+
+      const rows = await sql`
+        SELECT u.id, u.phone, u.member_id, u.created_at,
+               p.display_name, p.bio, p.languages, p.price_per_min_paise, p.avatar_url,
+               p.allowed_call_types, p.kyc_status, p.talks_about, p.hobbies,
+               (SELECT COUNT(*)::int FROM kyc_submissions k WHERE k.user_id = u.id AND k.status = 'pending') AS pending_kyc_docs
+        FROM users u
+        JOIN creator_profiles p ON p.user_id = u.id
+        WHERE p.verification_status = 'pending'
+        ORDER BY u.created_at ASC
+        LIMIT ${limit} OFFSET ${offset}`;
+
+      res.json({
+        total,
+        limit,
+        offset,
+        approvals: rows.map((r: Record<string, unknown>) => ({
+          id: r.id,
+          phone: r.phone,
+          memberId: r.member_id || null,
+          name: r.display_name,
+          bio: r.bio || null,
+          languages: r.languages,
+          ratePaisePerMin: Number(r.price_per_min_paise),
+          avatarUrl: r.avatar_url || null,
+          allowedCallTypes: r.allowed_call_types,
+          kycStatus: r.kyc_status,
+          talksAbout: r.talks_about,
+          hobbies: r.hobbies,
+          pendingKycDocs: r.pending_kyc_docs,
+          appliedAt: r.created_at,
+        })),
+      });
+    } catch (err) {
+      httpError(res, err, "Could not load approvals.");
+    }
+  });
+
+  /**
+   * POST /api/admin/dashboard/creators/:id/decision?adminSecret=XXX
+   * Body: { decision: 'approve' | 'reject', note? }
+   * Approving sets verification_status='approved'; rejecting sets 'rejected'.
+   */
+  app.post("/api/admin/dashboard/creators/:id/decision", express.json(), async (req: Request, res: Response) => {
+    if (!checkDashboardAuth(req, res)) return;
+    try {
+      const creatorId = String(req.params.id);
+      const body = (req.body as Record<string, unknown> | undefined) ?? {};
+      const decision = String(body.decision || "").toLowerCase();
+      if (decision !== "approve" && decision !== "reject") {
+        res.status(400).json({ error: "decision must be 'approve' or 'reject'." });
+        return;
+      }
+      const newStatus = decision === "approve" ? "approved" : "rejected";
+      const result = await sql`
+        UPDATE creator_profiles
+        SET verification_status = ${newStatus}, updated_at = NOW()
+        WHERE user_id = ${creatorId}
+        RETURNING user_id`;
+      if (result.length === 0) {
+        res.status(404).json({ error: "Creator profile not found." });
+        return;
+      }
+      res.json({ success: true, creatorId, verificationStatus: newStatus });
+    } catch (err) {
+      httpError(res, err, "Could not update creator status.");
+    }
+  });
+
+  /**
+   * GET /api/admin/dashboard/kyc?adminSecret=XXX&limit&offset&status
+   * KYC document submissions with creator info. status: pending|approved|rejected (default pending).
+   */
+  app.get("/api/admin/dashboard/kyc", async (req: Request, res: Response) => {
+    if (!checkDashboardAuth(req, res)) return;
+    try {
+      const limit = Math.min(Math.max(Number(req.query.limit) || 50, 1), 200);
+      const offset = Math.max(Number(req.query.offset) || 0, 0);
+      const statusFilter = String(req.query.status || "pending").toLowerCase();
+      const status = ["pending", "approved", "rejected"].includes(statusFilter) ? statusFilter : "pending";
+
+      const countRows = await sql`SELECT COUNT(*)::int AS c FROM kyc_submissions WHERE status = ${status}`;
+      const total = countRows[0].c;
+
+      const rows = await sql`
+        SELECT k.id, k.user_id, k.doc_type, k.doc_url, k.status, k.reviewer_note, k.created_at, k.reviewed_at,
+               COALESCE(p.display_name, u.phone) AS creator_name, u.phone AS creator_phone,
+               p.verification_status AS creator_verification_status
+        FROM kyc_submissions k
+        JOIN users u ON u.id = k.user_id
+        LEFT JOIN creator_profiles p ON p.user_id = k.user_id
+        WHERE k.status = ${status}
+        ORDER BY k.created_at ASC
+        LIMIT ${limit} OFFSET ${offset}`;
+
+      res.json({
+        total,
+        limit,
+        offset,
+        status,
+        submissions: rows.map((r: Record<string, unknown>) => ({
+          id: r.id,
+          creatorId: r.user_id,
+          creatorName: r.creator_name,
+          creatorPhone: r.creator_phone,
+          creatorVerificationStatus: r.creator_verification_status,
+          docType: r.doc_type,
+          docUrl: r.doc_url,
+          status: r.status,
+          reviewerNote: r.reviewer_note || null,
+          submittedAt: r.created_at,
+          reviewedAt: r.reviewed_at || null,
+        })),
+      });
+    } catch (err) {
+      httpError(res, err, "Could not load KYC submissions.");
+    }
+  });
+
+  /**
+   * POST /api/admin/dashboard/kyc/:id/decision?adminSecret=XXX
+   * Body: { decision: 'approve' | 'reject', note? }
+   * Approving also flips the creator's kyc_status to 'verified'; rejecting sets 'rejected'.
+   */
+  app.post("/api/admin/dashboard/kyc/:id/decision", express.json(), async (req: Request, res: Response) => {
+    if (!checkDashboardAuth(req, res)) return;
+    try {
+      const kycId = String(req.params.id);
+      const body = (req.body as Record<string, unknown> | undefined) ?? {};
+      const decision = String(body.decision || "").toLowerCase();
+      if (decision !== "approve" && decision !== "reject") {
+        res.status(400).json({ error: "decision must be 'approve' or 'reject'." });
+        return;
+      }
+      const newStatus = decision === "approve" ? "approved" : "rejected";
+      const note = typeof body.note === "string" ? body.note.slice(0, 500) : null;
+      const result = await sql`
+        UPDATE kyc_submissions
+        SET status = ${newStatus}, reviewer_note = ${note}, reviewed_at = NOW()
+        WHERE id = ${kycId}
+        RETURNING user_id`;
+      if (result.length === 0) {
+        res.status(404).json({ error: "KYC submission not found." });
+        return;
+      }
+      const creatorId = (result[0] as Record<string, unknown>).user_id as string;
+      const kycStatus = decision === "approve" ? "verified" : "rejected";
+      await sql`UPDATE creator_profiles SET kyc_status = ${kycStatus}, updated_at = NOW() WHERE user_id = ${creatorId}`;
+      res.json({ success: true, kycId, status: newStatus, creatorId, creatorKycStatus: kycStatus });
+    } catch (err) {
+      httpError(res, err, "Could not update KYC status.");
+    }
+  });
 }
