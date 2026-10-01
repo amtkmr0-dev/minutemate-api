@@ -523,6 +523,16 @@ export function registerCreatorRoutes(app: Express): void {
       if (user.role === "user") {
         await db.update(users).set({ role: "creator", updatedAt: new Date() }).where(eq(users.id, userId));
       }
+      // 2026-10-01: new creators require admin approval via the dashboard.
+      // Existing approved/rejected creators keep their status on profile updates.
+      const [existingProfile] = await db
+        .select({ verificationStatus: creatorProfiles.verificationStatus })
+        .from(creatorProfiles)
+        .where(eq(creatorProfiles.userId, userId))
+        .limit(1);
+      const keepStatus = existingProfile && existingProfile.verificationStatus !== "pending"
+        ? existingProfile.verificationStatus
+        : "pending";
       const values = {
         userId,
         displayName,
@@ -533,7 +543,7 @@ export function registerCreatorRoutes(app: Express): void {
         allowedCallTypes: callTypes,
         talksAbout: JSON.stringify(Array.isArray(body.talksAbout) ? body.talksAbout.filter((t): t is string => typeof t === "string").slice(0, 10) : []),
         hobbies: JSON.stringify(Array.isArray(body.hobbies) ? body.hobbies.filter((t): t is string => typeof t === "string").slice(0, 10) : []),
-        verificationStatus: "approved", // trial mode — admin approval queue arrives with the dashboard
+        verificationStatus: keepStatus,
         updatedAt: new Date(),
       };
       await db.insert(creatorProfiles).values(values).onConflictDoUpdate({ target: creatorProfiles.userId, set: values });
