@@ -743,4 +743,256 @@ export function registerRoutes(app: Express): void {
       httpError(res, err, "Could not publish release.");
     }
   });
+
+  /* ---------------------------------------------------------------- */
+  /* Admin dashboard (adminSecret query param auth)                     */
+  /* ---------------------------------------------------------------- */
+
+  /**
+   * Timing-safe admin secret check for dashboard endpoints.
+   * Returns true when authorized; sends 403 and returns false otherwise.
+   * The secret itself is never logged.
+   */
+  function checkDashboardAuth(req: Request, res: Response): boolean {
+    const configured = process.env.APP_ADMIN_SECRET || "";
+    const provided = String(req.query.adminSecret || "");
+    if (!configured) {
+      res.status(503).json({ error: "Admin dashboard is not configured." });
+      return false;
+    }
+    const a = Buffer.from(provided);
+    const b = Buffer.from(configured);
+    if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) {
+      res.status(403).json({ error: "Forbidden." });
+      return false;
+    }
+    return true;
+  }
+
+  /**
+   * GET /api/admin/dashboard/stats?adminSecret=XXX
+   * Overview counts: users, creators, calls, revenue, active calls, pending approvals.
+   */
+  app.get("/api/admin/dashboard/stats", async (req: Request, res: Response) => {
+    if (!checkDashboardAuth(req, res)) return;
+    try {
+      const [userRow] = await sql`SELECT COUNT(*)::int AS c FROM users WHERE role = 'user'`;
+      const [creatorRow] = await sql`SELECT COUNT(*)::int AS c FROM users WHERE role = 'creator'`;
+      const [callRow] = await sql`SELECT COUNT(*)::int AS c FROM call_sessions`;
+      const [revenueRow] = await sql`SELECT COALESCE(SUM(cost_paise), 0)::bigint AS s FROM call_sessions WHERE status = 'ended'`;
+      const [activeRow] = await sql`SELECT COUNT(*)::int AS c FROM call_sessions WHERE status IN ('ringing', 'active')`;
+      const [pendingRow] = await sql`SELECT COUNT(*)::int AS c FROM creator_profiles WHERE verification_status = 'pending'`;
+      res.json({
+        totalUsers: userRow.c,
+        totalCreators: creatorRow.c,
+        totalCalls: callRow.c,
+        totalRevenuePaise: Number(revenueRow.s),
+        activeCalls: activeRow.c,
+        pendingApprovals: pendingRow.c,
+      });
+    } catch (err) {
+      httpError(res, err, "Could not load dashboard stats.");
+    }
+  });
+
+  /**
+   * GET /api/admin/dashboard/users?adminSecret=XXX&limit&offset&search
+   * Paginated user list with wallet balance, call counts and spend.
+   */
+  app.get("/api/admin/dashboard/users", async (req: Request, res: Response) => {
+    if (!checkDashboardAuth(req, res)) return;
+    try {
+      const limit = Math.min(Math.max(Number(req.query.limit) || 50, 1), 200);
+      const offset = Math.max(Number(req.query.offset) || 0, 0);
+      const search = String(req.query.search || "").trim();
+      const like = search ? `%${search}%` : null;
+
+      const countRows = like
+        ? await sql`SELECT COUNT(*)::int AS c FROM users WHERE role = 'user' AND (phone ILIKE ${like} OR COALESCE(name,'') ILIKE ${like} OR COALESCE(display_name,'') ILIKE ${like} OR COALESCE(member_id,'') ILIKE ${like})`
+        : await sql`SELECT COUNT(*)::int AS c FROM users WHERE role = 'user'`;
+      const total = countRows[0].c;
+
+      const rows = like
+        ? await sql`
+            SELECT u.id, u.phone, u.name, u.display_name, u.member_id, u.status, u.created_at,
+                   COALESCE(w.balance_paise, 0)::bigint AS balance_paise,
+                   (SELECT COUNT(*)::int FROM call_sessions c WHERE c.user_id = u.id) AS total_calls,
+                   COALESCE((SELECT SUM(cost_paise)::bigint FROM call_sessions c WHERE c.user_id = u.id AND c.status = 'ended'), 0) AS total_spent_paise
+            FROM users u
+            LEFT JOIN wallets w ON w.user_id = u.id
+            WHERE u.role = 'user' AND (u.phone ILIKE ${like} OR COALESCE(u.name,'') ILIKE ${like} OR COALESCE(u.display_name,'') ILIKE ${like} OR COALESCE(u.member_id,'') ILIKE ${like})
+            ORDER BY u.created_at DESC
+            LIMIT ${limit} OFFSET ${offset}`
+        : await sql`
+            SELECT u.id, u.phone, u.name, u.display_name, u.member_id, u.status, u.created_at,
+                   COALESCE(w.balance_paise, 0)::bigint AS balance_paise,
+                   (SELECT COUNT(*)::int FROM call_sessions c WHERE c.user_id = u.id) AS total_calls,
+                   COALESCE((SELECT SUM(cost_paise)::bigint FROM call_sessions c WHERE c.user_id = u.id AND c.status = 'ended'), 0) AS total_spent_paise
+            FROM users u
+            LEFT JOIN wallets w ON w.user_id = u.id
+            WHERE u.role = 'user'
+            ORDER BY u.created_at DESC
+            LIMIT ${limit} OFFSET ${offset}`;
+
+      res.json({
+        total,
+        limit,
+        offset,
+        users: rows.map((r: Record<string, unknown>) => ({
+          id: r.id,
+          phone: r.phone,
+          name: r.name || r.display_name || null,
+          memberId: r.member_id || null,
+          status: r.status,
+          balancePaise: Number(r.balance_paise),
+          totalCalls: r.total_calls,
+          totalSpentPaise: Number(r.total_spent_paise),
+          createdAt: r.created_at,
+        })),
+      });
+    } catch (err) {
+      httpError(res, err, "Could not load users.");
+    }
+  });
+
+  /**
+   * GET /api/admin/dashboard/creators?adminSecret=XXX&limit&offset&search
+   * Paginated creator list with profile, earnings wallet, call stats, ratings.
+   */
+  app.get("/api/admin/dashboard/creators", async (req: Request, res: Response) => {
+    if (!checkDashboardAuth(req, res)) return;
+    try {
+      const limit = Math.min(Math.max(Number(req.query.limit) || 50, 1), 200);
+      const offset = Math.max(Number(req.query.offset) || 0, 0);
+      const search = String(req.query.search || "").trim();
+      const like = search ? `%${search}%` : null;
+
+      const countRows = like
+        ? await sql`SELECT COUNT(*)::int AS c FROM users u JOIN creator_profiles p ON p.user_id = u.id WHERE u.role = 'creator' AND (u.phone ILIKE ${like} OR p.display_name ILIKE ${like} OR COALESCE(u.member_id,'') ILIKE ${like})`
+        : await sql`SELECT COUNT(*)::int AS c FROM users WHERE role = 'creator'`;
+      const total = countRows[0].c;
+
+      const rows = like
+        ? await sql`
+            SELECT u.id, u.phone, u.member_id, u.status AS user_status, u.created_at,
+                   p.display_name, p.price_per_min_paise, p.verification_status, p.kyc_status,
+                   p.is_online, p.rating, p.rating_count, p.total_calls, p.total_minutes,
+                   COALESCE(cw.balance_paise, 0)::bigint AS earnings_balance_paise,
+                   COALESCE(cw.lifetime_paise, 0)::bigint AS lifetime_earnings_paise
+            FROM users u
+            JOIN creator_profiles p ON p.user_id = u.id
+            LEFT JOIN creator_wallets cw ON cw.user_id = u.id
+            WHERE u.role = 'creator' AND (u.phone ILIKE ${like} OR p.display_name ILIKE ${like} OR COALESCE(u.member_id,'') ILIKE ${like})
+            ORDER BY u.created_at DESC
+            LIMIT ${limit} OFFSET ${offset}`
+        : await sql`
+            SELECT u.id, u.phone, u.member_id, u.status AS user_status, u.created_at,
+                   p.display_name, p.price_per_min_paise, p.verification_status, p.kyc_status,
+                   p.is_online, p.rating, p.rating_count, p.total_calls, p.total_minutes,
+                   COALESCE(cw.balance_paise, 0)::bigint AS earnings_balance_paise,
+                   COALESCE(cw.lifetime_paise, 0)::bigint AS lifetime_earnings_paise
+            FROM users u
+            JOIN creator_profiles p ON p.user_id = u.id
+            LEFT JOIN creator_wallets cw ON cw.user_id = u.id
+            WHERE u.role = 'creator'
+            ORDER BY u.created_at DESC
+            LIMIT ${limit} OFFSET ${offset}`;
+
+      res.json({
+        total,
+        limit,
+        offset,
+        creators: rows.map((r: Record<string, unknown>) => ({
+          id: r.id,
+          phone: r.phone,
+          memberId: r.member_id || null,
+          name: r.display_name,
+          ratePaisePerMin: Number(r.price_per_min_paise),
+          status: r.user_status,
+          verificationStatus: r.verification_status,
+          kycStatus: r.kyc_status,
+          isOnline: r.is_online,
+          rating: r.rating_count ? Number(r.rating) / 10 : null,
+          ratingCount: r.rating_count,
+          totalCalls: r.total_calls,
+          totalMinutes: r.total_minutes,
+          earningsBalancePaise: Number(r.earnings_balance_paise),
+          lifetimeEarningsPaise: Number(r.lifetime_earnings_paise),
+          createdAt: r.created_at,
+        })),
+      });
+    } catch (err) {
+      httpError(res, err, "Could not load creators.");
+    }
+  });
+
+  /**
+   * GET /api/admin/dashboard/calls?adminSecret=XXX&limit&offset&status
+   * Paginated call sessions with user/creator names.
+   * status filter: ringing|active|ended|rejected|missed|cancelled
+   */
+  app.get("/api/admin/dashboard/calls", async (req: Request, res: Response) => {
+    if (!checkDashboardAuth(req, res)) return;
+    try {
+      const limit = Math.min(Math.max(Number(req.query.limit) || 50, 1), 200);
+      const offset = Math.max(Number(req.query.offset) || 0, 0);
+      const statusFilter = String(req.query.status || "").trim().toLowerCase();
+      const validStatuses = ["ringing", "active", "ended", "rejected", "missed", "cancelled"];
+      const status = validStatuses.includes(statusFilter) ? statusFilter : null;
+
+      const countRows = status
+        ? await sql`SELECT COUNT(*)::int AS c FROM call_sessions WHERE status = ${status}`
+        : await sql`SELECT COUNT(*)::int AS c FROM call_sessions`;
+      const total = countRows[0].c;
+
+      const rows = status
+        ? await sql`
+            SELECT c.id, c.user_id, c.creator_id, c.call_type, c.status, c.duration_sec,
+                   c.cost_paise, c.rate_paise_per_min, c.started_at, c.ended_at, c.created_at,
+                   COALESCE(uu.display_name, uu.phone) AS user_name,
+                   COALESCE(cc.display_name, uu2.phone) AS creator_name
+            FROM call_sessions c
+            LEFT JOIN users uu ON uu.id = c.user_id
+            LEFT JOIN creator_profiles cc ON cc.user_id = c.creator_id
+            LEFT JOIN users uu2 ON uu2.id = c.creator_id
+            WHERE c.status = ${status}
+            ORDER BY c.created_at DESC
+            LIMIT ${limit} OFFSET ${offset}`
+        : await sql`
+            SELECT c.id, c.user_id, c.creator_id, c.call_type, c.status, c.duration_sec,
+                   c.cost_paise, c.rate_paise_per_min, c.started_at, c.ended_at, c.created_at,
+                   COALESCE(uu.display_name, uu.phone) AS user_name,
+                   COALESCE(cc.display_name, uu2.phone) AS creator_name
+            FROM call_sessions c
+            LEFT JOIN users uu ON uu.id = c.user_id
+            LEFT JOIN creator_profiles cc ON cc.user_id = c.creator_id
+            LEFT JOIN users uu2 ON uu2.id = c.creator_id
+            WHERE TRUE
+            ORDER BY c.created_at DESC
+            LIMIT ${limit} OFFSET ${offset}`;
+
+      res.json({
+        total,
+        limit,
+        offset,
+        calls: rows.map((r: Record<string, unknown>) => ({
+          id: r.id,
+          userId: r.user_id,
+          userName: r.user_name,
+          creatorId: r.creator_id,
+          creatorName: r.creator_name,
+          type: r.call_type,
+          status: r.status,
+          durationSec: r.duration_sec,
+          costPaise: Number(r.cost_paise),
+          ratePaisePerMin: Number(r.rate_paise_per_min),
+          startedAt: r.started_at,
+          endedAt: r.ended_at,
+          createdAt: r.created_at,
+        })),
+      });
+    } catch (err) {
+      httpError(res, err, "Could not load calls.");
+    }
+  });
 }
