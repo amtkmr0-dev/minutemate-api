@@ -769,9 +769,31 @@ export function registerRoutes(app: Express): void {
     return true;
   }
 
+  /** Parse a dashboard time-range selector into a "created_at >=" Date, or null for lifetime. */
+  function dashboardRangeStart(range: string): Date | null {
+    const now = Date.now();
+    const ms: Record<string, number> = {
+      "1h": 3_600_000,
+      "1d": 86_400_000,
+      "1w": 7 * 86_400_000,
+      "1m": 30 * 86_400_000,
+      "1y": 365 * 86_400_000,
+    };
+    const span = ms[range];
+    return span ? new Date(now - span) : null;
+  }
+
+  /** Bucket size for report time series. */
+  function dashboardBucket(range: string): string {
+    if (range === "1h" || range === "1d") return "hour";
+    if (range === "1y") return "month";
+    return "day";
+  }
+
   /**
-   * GET /api/admin/dashboard/stats?adminSecret=XXX
+   * GET /api/admin/dashboard/stats?adminSecret=XXX&range=1h|1d|1w|1m|1y
    * Overview counts: users, creators, calls, revenue, active calls, pending approvals.
+   * With ?range=, also returns period-filtered numbers for the time filter.
    */
   app.get("/api/admin/dashboard/stats", async (req: Request, res: Response) => {
     if (!checkDashboardAuth(req, res)) return;
@@ -782,14 +804,35 @@ export function registerRoutes(app: Express): void {
       const [revenueRow] = await sql`SELECT COALESCE(SUM(cost_paise), 0)::bigint AS s FROM call_sessions WHERE status = 'ended'`;
       const [activeRow] = await sql`SELECT COUNT(*)::int AS c FROM call_sessions WHERE status IN ('ringing', 'active')`;
       const [pendingRow] = await sql`SELECT COUNT(*)::int AS c FROM creator_profiles WHERE verification_status = 'pending'`;
-      res.json({
+      const [pendingKycRow] = await sql`SELECT COUNT(*)::int AS c FROM kyc_submissions WHERE status = 'pending'`;
+      const payload: Record<string, unknown> = {
         totalUsers: userRow.c,
         totalCreators: creatorRow.c,
         totalCalls: callRow.c,
         totalRevenuePaise: Number(revenueRow.s),
         activeCalls: activeRow.c,
         pendingApprovals: pendingRow.c,
-      });
+        pendingKyc: pendingKycRow.c,
+      };
+      const since = dashboardRangeStart(String(req.query.range || ""));
+      if (since) {
+        const [p] = await sql`
+          SELECT COUNT(*)::int AS calls,
+                 COALESCE(SUM(cost_paise), 0)::bigint AS revenue,
+                 COALESCE(SUM(duration_sec), 0)::bigint AS minutes_x60
+          FROM call_sessions WHERE created_at >= ${since}`;
+        const [pu] = await sql`SELECT COUNT(*)::int AS c FROM users WHERE role = 'user' AND created_at >= ${since}`;
+        const [pc] = await sql`SELECT COUNT(*)::int AS c FROM users WHERE role = 'creator' AND created_at >= ${since}`;
+        payload.period = {
+          range: String(req.query.range),
+          calls: p.calls,
+          revenuePaise: Number(p.revenue),
+          minutes: Math.round(Number(p.minutes_x60) / 60),
+          newUsers: pu.c,
+          newCreators: pc.c,
+        };
+      }
+      res.json(payload);
     } catch (err) {
       httpError(res, err, "Could not load dashboard stats.");
     }
@@ -1159,6 +1202,257 @@ export function registerRoutes(app: Express): void {
       res.json({ success: true, kycId, status: newStatus, creatorId, creatorKycStatus: kycStatus });
     } catch (err) {
       httpError(res, err, "Could not update KYC status.");
+    }
+  });
+
+  /**
+   * GET /api/admin/dashboard/users/:id?adminSecret=XXX
+   * Full user profile: identity, wallet, spend stats, recent calls, recent transactions.
+   */
+  app.get("/api/admin/dashboard/users/:id", async (req: Request, res: Response) => {
+    if (!checkDashboardAuth(req, res)) return;
+    try {
+      const userId = String(req.params.id);
+      const [u] = await sql`
+        SELECT u.id, u.phone, u.name, u.display_name, u.member_id, u.status, u.role,
+               u.avatar_url, u.created_at,
+               COALESCE(w.balance_paise, 0)::bigint AS balance_paise
+        FROM users u
+        LEFT JOIN wallets w ON w.user_id = u.id
+        WHERE u.id = ${userId}`;
+      if (!u) {
+        res.status(404).json({ error: "User not found." });
+        return;
+      }
+      const r = u as Record<string, unknown>;
+      const [spendRow] = await sql`
+        SELECT COUNT(*)::int AS calls, COALESCE(SUM(cost_paise), 0)::bigint AS spent
+        FROM call_sessions WHERE user_id = ${userId} AND status = 'ended'`;
+      const callRows = await sql`
+        SELECT c.id, c.call_type, c.status, c.duration_sec, c.cost_paise, c.created_at,
+               COALESCE(p.display_name, u2.phone) AS creator_name
+        FROM call_sessions c
+        LEFT JOIN creator_profiles p ON p.user_id = c.creator_id
+        LEFT JOIN users u2 ON u2.id = c.creator_id
+        WHERE c.user_id = ${userId}
+        ORDER BY c.created_at DESC LIMIT 25`;
+      const txRows = await sql`
+        SELECT id, type, amount_paise, bonus_paise, balance_after_paise, description, created_at
+        FROM transactions WHERE user_id = ${userId}
+        ORDER BY created_at DESC LIMIT 25`;
+      const s = spendRow as Record<string, unknown>;
+      res.json({
+        profile: {
+          id: r.id, phone: r.phone, name: r.name || null, displayName: r.display_name || null,
+          memberId: r.member_id || null, status: r.status, role: r.role,
+          avatarUrl: r.avatar_url || null, joinedAt: r.created_at,
+          walletBalancePaise: Number(r.balance_paise),
+          totalCalls: s.calls, totalSpentPaise: Number(s.spent),
+        },
+        calls: (callRows as Record<string, unknown>[]).map((c) => ({
+          id: c.id, type: c.call_type, status: c.status,
+          durationSec: c.duration_sec, costPaise: Number(c.cost_paise),
+          creatorName: c.creator_name, createdAt: c.created_at,
+        })),
+        transactions: (txRows as Record<string, unknown>[]).map((t) => ({
+          id: t.id, type: t.type, amountPaise: Number(t.amount_paise),
+          bonusPaise: Number(t.bonus_paise), balanceAfterPaise: Number(t.balance_after_paise),
+          description: t.description || null, createdAt: t.created_at,
+        })),
+      });
+    } catch (err) {
+      httpError(res, err, "Could not load user profile.");
+    }
+  });
+
+  /**
+   * GET /api/admin/dashboard/creators/:id?adminSecret=XXX
+   * Full creator profile: identity, rates, online/call-type status, wallet,
+   * bank details, KYC submissions, withdrawals, recent calls.
+   */
+  app.get("/api/admin/dashboard/creators/:id", async (req: Request, res: Response) => {
+    if (!checkDashboardAuth(req, res)) return;
+    try {
+      const creatorId = String(req.params.id);
+      const [row] = await sql`
+        SELECT u.id, u.phone, u.name, u.member_id, u.status AS user_status, u.created_at,
+               p.display_name, p.bio, p.languages, p.price_per_min_paise, p.avatar_url,
+               p.media_urls, p.intro_video_url, p.allowed_call_types, p.verification_status,
+               p.kyc_status, p.is_online, p.random_match_enabled, p.rating, p.rating_count,
+               p.total_calls, p.total_minutes, p.talks_about, p.hobbies,
+               COALESCE(cw.balance_paise, 0)::bigint AS earnings_balance_paise,
+               COALESCE(cw.lifetime_paise, 0)::bigint AS lifetime_earnings_paise,
+               b.account_holder, b.account_number, b.ifsc, b.upi_id
+        FROM users u
+        JOIN creator_profiles p ON p.user_id = u.id
+        LEFT JOIN creator_wallets cw ON cw.user_id = u.id
+        LEFT JOIN creator_bank_details b ON b.user_id = u.id
+        WHERE u.id = ${creatorId}`;
+      if (!row) {
+        res.status(404).json({ error: "Creator not found." });
+        return;
+      }
+      const r = row as Record<string, unknown>;
+      const kycRows = await sql`
+        SELECT id, doc_type, doc_url, status, reviewer_note, created_at, reviewed_at
+        FROM kyc_submissions WHERE user_id = ${creatorId} ORDER BY created_at DESC`;
+      const wdRows = await sql`
+        SELECT id, amount_paise, destination, status, created_at, processed_at
+        FROM withdrawals WHERE creator_id = ${creatorId} ORDER BY created_at DESC LIMIT 25`;
+      const callRows = await sql`
+        SELECT c.id, c.call_type, c.status, c.duration_sec, c.cost_paise, c.rate_paise_per_min, c.created_at,
+               COALESCE(u2.display_name, u2.phone) AS user_name
+        FROM call_sessions c
+        LEFT JOIN users u2 ON u2.id = c.user_id
+        WHERE c.creator_id = ${creatorId}
+        ORDER BY c.created_at DESC LIMIT 25`;
+      const rating = Number(r.rating || 0);
+      res.json({
+        profile: {
+          id: r.id, phone: r.phone, realName: r.name || null, memberId: r.member_id || null,
+          accountStatus: r.user_status, joinedAt: r.created_at,
+          displayName: r.display_name, bio: r.bio || null, languages: r.languages,
+          ratePaisePerMin: Number(r.price_per_min_paise),
+          avatarUrl: r.avatar_url || null, mediaUrls: r.media_urls, introVideoUrl: r.intro_video_url || null,
+          allowedCallTypes: r.allowed_call_types,
+          videoCallEnabled: r.allowed_call_types === "video" || r.allowed_call_types === "both",
+          audioCallEnabled: r.allowed_call_types === "audio" || r.allowed_call_types === "both",
+          verificationStatus: r.verification_status, kycStatus: r.kyc_status,
+          isOnline: r.is_online, randomMatchEnabled: r.random_match_enabled,
+          rating: rating / 10, ratingCount: r.rating_count,
+          totalCalls: r.total_calls, totalMinutes: r.total_minutes,
+          talksAbout: r.talks_about, hobbies: r.hobbies,
+          earningsBalancePaise: Number(r.earnings_balance_paise),
+          lifetimeEarningsPaise: Number(r.lifetime_earnings_paise),
+          bankDetails: r.account_number || r.upi_id ? {
+            accountHolder: r.account_holder || null,
+            accountNumber: r.account_number || null,
+            ifsc: r.ifsc || null,
+            upiId: r.upi_id || null,
+          } : null,
+        },
+        kyc: (kycRows as Record<string, unknown>[]).map((k) => ({
+          id: k.id, docType: k.doc_type, docUrl: k.doc_url, status: k.status,
+          reviewerNote: k.reviewer_note || null, submittedAt: k.created_at, reviewedAt: k.reviewed_at || null,
+        })),
+        withdrawals: (wdRows as Record<string, unknown>[]).map((w) => ({
+          id: w.id, amountPaise: Number(w.amount_paise), destination: w.destination,
+          status: w.status, createdAt: w.created_at, processedAt: w.processed_at || null,
+        })),
+        calls: (callRows as Record<string, unknown>[]).map((c) => ({
+          id: c.id, type: c.call_type, status: c.status,
+          durationSec: c.duration_sec, costPaise: Number(c.cost_paise),
+          ratePaisePerMin: Number(c.rate_paise_per_min),
+          userName: c.user_name, createdAt: c.created_at,
+        })),
+      });
+    } catch (err) {
+      httpError(res, err, "Could not load creator profile.");
+    }
+  });
+
+  /**
+   * GET /api/admin/dashboard/reports/overview?adminSecret=XXX&range=1h|1d|1w|1m|1y
+   * Report data: time-series buckets, totals, top creators, top spenders, status breakdown.
+   * The dashboard renders charts and generates CSV downloads from this.
+   */
+  app.get("/api/admin/dashboard/reports/overview", async (req: Request, res: Response) => {
+    if (!checkDashboardAuth(req, res)) return;
+    try {
+      const range = String(req.query.range || "1w");
+      const since = dashboardRangeStart(range) || dashboardRangeStart("1w")!;
+      const bucket = dashboardBucket(range);
+
+      const callBuckets = await sql`
+        SELECT date_trunc(${bucket}, created_at) AS t, COUNT(*)::int AS calls,
+               COALESCE(SUM(cost_paise), 0)::bigint AS revenue,
+               COALESCE(SUM(duration_sec), 0)::bigint AS secs
+        FROM call_sessions WHERE created_at >= ${since}
+        GROUP BY 1 ORDER BY 1` as unknown as Record<string, unknown>[];
+      const userBuckets = await sql`
+        SELECT date_trunc(${bucket}, created_at) AS t, COUNT(*)::int AS c
+        FROM users WHERE role = 'user' AND created_at >= ${since}
+        GROUP BY 1 ORDER BY 1` as unknown as Record<string, unknown>[];
+      const creatorBuckets = await sql`
+        SELECT date_trunc(${bucket}, created_at) AS t, COUNT(*)::int AS c
+        FROM creator_profiles WHERE created_at >= ${since}
+        GROUP BY 1 ORDER BY 1` as unknown as Record<string, unknown>[];
+
+      const bucketMap = new Map<string, { t: string; calls: number; revenuePaise: number; minutes: number; newUsers: number; newCreators: number }>();
+      const key = (t: unknown) => new Date(t as string).toISOString();
+      for (const b of callBuckets) {
+        bucketMap.set(key(b.t), {
+          t: key(b.t), calls: b.calls as number, revenuePaise: Number(b.revenue),
+          minutes: Math.round(Number(b.secs) / 60), newUsers: 0, newCreators: 0,
+        });
+      }
+      for (const b of userBuckets) {
+        const k = key(b.t);
+        const e = bucketMap.get(k) || { t: k, calls: 0, revenuePaise: 0, minutes: 0, newUsers: 0, newCreators: 0 };
+        e.newUsers = b.c as number;
+        bucketMap.set(k, e);
+      }
+      for (const b of creatorBuckets) {
+        const k = key(b.t);
+        const e = bucketMap.get(k) || { t: k, calls: 0, revenuePaise: 0, minutes: 0, newUsers: 0, newCreators: 0 };
+        e.newCreators = b.c as number;
+        bucketMap.set(k, e);
+      }
+      const buckets = [...bucketMap.values()].sort((a, b) => a.t.localeCompare(b.t));
+
+      const [totals] = await sql`
+        SELECT COUNT(*)::int AS calls, COALESCE(SUM(cost_paise), 0)::bigint AS revenue,
+               COALESCE(SUM(duration_sec), 0)::bigint AS secs
+        FROM call_sessions WHERE created_at >= ${since}` as unknown as Record<string, unknown>[];
+      const [tu] = await sql`SELECT COUNT(*)::int AS c FROM users WHERE role = 'user' AND created_at >= ${since}`;
+      const [tc] = await sql`SELECT COUNT(*)::int AS c FROM creator_profiles WHERE created_at >= ${since}`;
+
+      const topCreators = await sql`
+        SELECT c.creator_id AS id, COALESCE(p.display_name, u.phone) AS name,
+               COUNT(*)::int AS calls, COALESCE(SUM(c.duration_sec), 0)::int AS secs,
+               COALESCE(SUM(c.cost_paise), 0)::bigint AS revenue
+        FROM call_sessions c
+        LEFT JOIN creator_profiles p ON p.user_id = c.creator_id
+        LEFT JOIN users u ON u.id = c.creator_id
+        WHERE c.created_at >= ${since} AND c.status = 'ended'
+        GROUP BY c.creator_id, p.display_name, u.phone
+        ORDER BY secs DESC LIMIT 10` as unknown as Record<string, unknown>[];
+
+      const topSpenders = await sql`
+        SELECT t.user_id AS id, COALESCE(u.display_name, u.name, u.phone) AS name, u.phone,
+               COUNT(*)::int AS calls, COALESCE(SUM(-t.amount_paise), 0)::bigint AS spent
+        FROM transactions t
+        JOIN users u ON u.id = t.user_id
+        WHERE t.type = 'call_debit' AND t.created_at >= ${since}
+        GROUP BY t.user_id, u.display_name, u.name, u.phone
+        ORDER BY spent DESC LIMIT 10` as unknown as Record<string, unknown>[];
+
+      const statusRows = await sql`
+        SELECT status, COUNT(*)::int AS c FROM call_sessions
+        WHERE created_at >= ${since} GROUP BY status` as unknown as Record<string, unknown>[];
+
+      res.json({
+        range,
+        bucket,
+        buckets,
+        totals: {
+          calls: (totals as Record<string, unknown>).calls,
+          revenuePaise: Number((totals as Record<string, unknown>).revenue),
+          minutes: Math.round(Number((totals as Record<string, unknown>).secs) / 60),
+          newUsers: (tu as Record<string, unknown>).c,
+          newCreators: (tc as Record<string, unknown>).c,
+        },
+        topCreators: (topCreators as Record<string, unknown>[]).map((x) => ({
+          id: x.id, name: x.name, calls: x.calls,
+          minutes: Math.round(Number(x.secs) / 60), revenuePaise: Number(x.revenue),
+        })),
+        topSpenders: (topSpenders as Record<string, unknown>[]).map((x) => ({
+          id: x.id, name: x.name, phone: x.phone, calls: x.calls, spentPaise: Number(x.spent),
+        })),
+        statusBreakdown: (statusRows as Record<string, unknown>[]).map((x) => ({ status: x.status, count: x.c })),
+      });
+    } catch (err) {
+      httpError(res, err, "Could not load report.");
     }
   });
 }
