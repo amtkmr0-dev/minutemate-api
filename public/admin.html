@@ -1,0 +1,1657 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<meta name="color-scheme" content="light dark" />
+<link rel="icon" href="data:," />
+<title>MinuteMate Admin Dashboard</title>
+<style>
+:root{
+  --bg:#0b0f14;
+  --surface:#101720;
+  --surface-2:#151e2a;
+  --surface-3:#1b2534;
+  --border:#222f42;
+  --text:#e9eff6;
+  --muted:#8f9db0;
+  --accent:#22d3ee;
+  --accent-ink:#04252c;
+  --ok:#34d399; --ok-bg:rgba(52,211,153,.14);
+  --warn:#fbbf24; --warn-bg:rgba(251,191,36,.14);
+  --bad:#f87171; --bad-bg:rgba(248,113,113,.14);
+  --info:#60a5fa; --info-bg:rgba(96,165,250,.14);
+  --muted-bg:rgba(143,157,176,.14);
+  --input-bg:#0e141d;
+  --scrim:rgba(4,8,12,.72);
+  --shadow:0 8px 28px rgba(0,0,0,.45);
+  --radius:14px;
+}
+@media (prefers-color-scheme: light){
+  :root{
+    --bg:#f2f4f7;
+    --surface:#ffffff;
+    --surface-2:#f7f9fc;
+    --surface-3:#eef1f6;
+    --border:#dfe5ee;
+    --text:#16202c;
+    --muted:#5d6b7e;
+    --accent:#0891b2;
+    --accent-ink:#ffffff;
+    --input-bg:#ffffff;
+    --scrim:rgba(20,32,44,.55);
+    --shadow:0 8px 24px rgba(23,37,53,.12);
+  }
+}
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+html{-webkit-text-size-adjust:100%}
+body{
+  margin:0; background:var(--bg); color:var(--text);
+  font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+  line-height:1.45;
+}
+input,select,textarea,button{font:inherit;color:inherit}
+button{cursor:pointer}
+
+/* ---------- login ---------- */
+.login-wrap{min-height:100dvh;display:flex;align-items:center;justify-content:center;padding:24px}
+.login-card{
+  width:100%;max-width:400px;background:var(--surface);border:1px solid var(--border);
+  border-radius:var(--radius);box-shadow:var(--shadow);padding:28px 24px;
+}
+.login-card h1{margin:0 0 6px;font-size:1.35rem;letter-spacing:-.01em}
+.login-card h1 span{color:var(--accent)}
+.login-card .sub{margin:0 0 20px;color:var(--muted);font-size:.95rem}
+.login-card label{display:block;font-size:.85rem;color:var(--muted);margin-bottom:14px}
+.login-card input{
+  display:block;width:100%;margin-top:6px;padding:12px;border:1px solid var(--border);
+  border-radius:10px;background:var(--input-bg);outline:none;
+}
+.login-card input:focus{border-color:var(--accent);box-shadow:0 0 0 3px color-mix(in srgb,var(--accent) 25%,transparent)}
+.hint{font-size:.8rem;color:var(--muted);margin:14px 0 0}
+.error{
+  background:var(--bad-bg);border:1px solid color-mix(in srgb,var(--bad) 55%,transparent);
+  color:var(--bad);border-radius:10px;padding:10px 12px;font-size:.88rem;margin:0 0 14px;
+}
+
+/* ---------- buttons ---------- */
+.btn{
+  border:1px solid var(--border);background:var(--surface-2);color:var(--text);
+  border-radius:10px;padding:9px 14px;font-weight:600;font-size:.9rem;
+  transition:filter .15s ease,opacity .15s ease;
+}
+.btn:not(:disabled):hover{filter:brightness(1.12)}
+.btn:disabled{opacity:.55;cursor:default}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
+.btn.danger{background:var(--bad);border-color:var(--bad);color:#2b0a0a}
+.btn.ok{background:var(--ok);border-color:var(--ok);color:#06301f}
+.btn.ghost{background:transparent}
+.btn.block{width:100%;padding:12px}
+.btn.sm{padding:6px 10px;font-size:.83rem}
+
+/* ---------- app shell ---------- */
+#app{min-height:100dvh;display:flex;flex-direction:column}
+.topbar{
+  position:sticky;top:0;z-index:20;background:color-mix(in srgb,var(--bg) 88%,transparent);
+  backdrop-filter:blur(10px);border-bottom:1px solid var(--border);
+  padding:10px 16px 0;
+}
+.toprow{display:flex;align-items:center;justify-content:space-between;gap:10px;max-width:1180px;margin:0 auto;width:100%}
+.brand{font-weight:800;font-size:1.02rem;letter-spacing:-.01em;white-space:nowrap}
+.brand span{color:var(--accent)}
+.top-actions{display:flex;gap:8px}
+.tabs{display:flex;gap:6px;flex-wrap:wrap;max-width:1180px;margin:10px auto 0;padding-bottom:10px}
+.tabs button{
+  flex:1 1 auto;min-width:96px;background:transparent;border:1px solid var(--border);
+  border-radius:10px;padding:9px 12px;font-weight:600;font-size:.88rem;color:var(--muted);
+  display:inline-flex;align-items:center;justify-content:center;gap:7px;
+}
+.tabs button.active{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
+.tabs button:not(.active):hover{color:var(--text);border-color:var(--accent)}
+.count-pill{
+  min-width:22px;height:22px;padding:0 6px;border-radius:11px;font-size:.75rem;font-weight:700;
+  background:var(--warn);color:#2b1d02;display:inline-flex;align-items:center;justify-content:center;
+}
+.tabs button.active .count-pill{background:rgba(0,0,0,.18);color:inherit}
+
+main#content{width:100%;max-width:1180px;margin:0 auto;padding:18px 16px 64px;flex:1}
+.tabhead{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:2px 0 14px;flex-wrap:wrap}
+.tabhead h2{margin:0;font-size:1.15rem;letter-spacing:-.01em}
+.tabhead-r{display:flex;align-items:center;gap:10px}
+.updated{font-size:.8rem;color:var(--muted)}
+
+.controls{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px}
+.controls input[type="search"],.controls select{
+  background:var(--input-bg);border:1px solid var(--border);border-radius:10px;
+  padding:10px 12px;outline:none;min-width:0;
+}
+.controls input[type="search"]{flex:1 1 220px}
+.controls input:focus,.controls select:focus{border-color:var(--accent)}
+
+/* ---------- stat cards ---------- */
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:22px}
+.stat{
+  background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:14px 14px;
+}
+.stat .k{font-size:.76rem;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px}
+.stat .v{font-size:1.5rem;font-weight:800;letter-spacing:-.02em}
+.stat.accent{border-color:color-mix(in srgb,var(--accent) 45%,var(--border))}
+.stat.accent .v{color:var(--accent)}
+.subhead{display:flex;align-items:center;justify-content:space-between;margin:18px 0 10px}
+.subhead h3{margin:0;font-size:1rem}
+
+/* ---------- tables (desktop) → stacked cards (mobile) ---------- */
+.table-wrap{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden}
+table{width:100%;border-collapse:collapse;font-size:.88rem}
+thead th{
+  text-align:left;font-size:.72rem;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);
+  font-weight:700;padding:10px 12px;border-bottom:1px solid var(--border);background:var(--surface-2);
+  white-space:nowrap;
+}
+tbody td{padding:10px 12px;border-bottom:1px solid var(--border);vertical-align:top;word-break:break-word}
+tbody tr:last-child td{border-bottom:none}
+tbody tr:hover{background:color-mix(in srgb,var(--surface-2) 60%,transparent)}
+td.num,th.num{text-align:right;font-variant-numeric:tabular-nums}
+.muted{color:var(--muted)}
+.mono{font-variant-numeric:tabular-nums}
+
+.badge{
+  display:inline-flex;align-items:center;gap:6px;padding:3px 9px;border-radius:999px;
+  font-size:.76rem;font-weight:700;white-space:nowrap;
+  background:var(--muted-bg);color:var(--text);
+}
+.badge .dot{width:7px;height:7px;border-radius:50%;background:currentColor;flex:none}
+.badge.ok{background:var(--ok-bg);color:var(--ok)}
+.badge.warn{background:var(--warn-bg);color:var(--warn)}
+.badge.bad{background:var(--bad-bg);color:var(--bad)}
+.badge.info{background:var(--info-bg);color:var(--info)}
+
+.dot-online{display:inline-flex;align-items:center;gap:6px;font-size:.84rem}
+.dot-online i{width:8px;height:8px;border-radius:50%;font-style:normal}
+.dot-online.on i{background:var(--ok);box-shadow:0 0 8px var(--ok)}
+.dot-online.off i{background:var(--muted)}
+
+.pager{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:12px 14px;background:var(--surface-2);flex-wrap:wrap}
+.pager .info{font-size:.84rem;color:var(--muted)}
+.pager .btns{display:flex;gap:8px}
+
+/* ---------- approvals / kyc cards ---------- */
+.cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:12px}
+.card{
+  background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);
+  padding:16px;display:flex;flex-direction:column;gap:10px;
+}
+.card .who{display:flex;gap:12px;align-items:flex-start}
+.avatar{width:52px;height:52px;border-radius:50%;object-fit:cover;background:var(--surface-3);flex:none}
+.avatar-fallback{
+  width:52px;height:52px;border-radius:50%;background:var(--surface-3);flex:none;
+  display:flex;align-items:center;justify-content:center;font-weight:800;font-size:1.25rem;color:var(--accent);
+}
+.who .nm{font-weight:700;font-size:1rem}
+.who .ph{font-size:.85rem;color:var(--muted)}
+.kv{display:grid;grid-template-columns:auto 1fr;gap:4px 10px;font-size:.86rem}
+.kv dt{color:var(--muted)}.kv dd{margin:0;overflow-wrap:anywhere}
+.card .bio{font-size:.88rem;color:var(--muted);margin:0}
+.tagrow{display:flex;gap:6px;flex-wrap:wrap}
+.tag{background:var(--surface-3);border:1px solid var(--border);border-radius:999px;padding:3px 10px;font-size:.78rem}
+.card .actions{display:flex;gap:8px;margin-top:auto;padding-top:6px}
+.card .actions .btn{flex:1}
+.doc-thumb{
+  width:100%;height:170px;object-fit:cover;border-radius:10px;border:1px solid var(--border);
+  cursor:zoom-in;background:var(--surface-2);display:block;
+}
+.doc-thumb.missing{display:flex;align-items:center;justify-content:center;color:var(--muted);font-size:.85rem;cursor:default}
+
+/* ---------- states ---------- */
+.panel{
+  background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);
+  padding:34px 20px;text-align:center;color:var(--muted);
+}
+.panel h3{margin:0 0 8px;color:var(--text);font-size:1rem}
+.panel p{margin:0 0 14px;font-size:.9rem}
+.spinner{
+  width:38px;height:38px;border-radius:50%;margin:0 auto 12px;
+  border:3px solid var(--border);border-top-color:var(--accent);animation:spin .8s linear infinite;
+}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+/* ---------- modal ---------- */
+#modalWrap{position:fixed;inset:0;z-index:50;display:flex;align-items:center;justify-content:center;padding:18px}
+#modalWrap[hidden]{display:none}
+.scrim{position:absolute;inset:0;background:var(--scrim)}
+.sheet{
+  position:relative;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);
+  box-shadow:var(--shadow);width:100%;max-width:440px;padding:22px;max-height:90dvh;overflow:auto;
+}
+.sheet h3{margin:0 0 10px;font-size:1.05rem}
+.sheet p{margin:0 0 14px;color:var(--muted);font-size:.92rem}
+.sheet .row{display:flex;gap:8px;margin-top:16px}
+.sheet .row .btn{flex:1}
+.sheet textarea{
+  width:100%;min-height:76px;background:var(--input-bg);border:1px solid var(--border);
+  border-radius:10px;padding:10px 12px;resize:vertical;outline:none;
+}
+.sheet textarea:focus{border-color:var(--accent)}
+.sheet label{font-size:.84rem;color:var(--muted);display:block;margin-bottom:6px}
+.sheet img.full{width:100%;height:auto;max-height:68dvh;object-fit:contain;border-radius:10px;background:#000}
+
+/* ---------- toast ---------- */
+#toastWrap{position:fixed;left:0;right:0;bottom:0;z-index:60;display:flex;flex-direction:column;align-items:center;gap:8px;padding:16px;pointer-events:none}
+.toast{
+  background:var(--surface-3);border:1px solid var(--border);color:var(--text);
+  border-radius:12px;padding:11px 16px;font-size:.88rem;font-weight:600;box-shadow:var(--shadow);
+  animation:tin .2s ease;max-width:min(92vw,480px);text-align:center;
+}
+.toast.bad{background:var(--bad);color:#2b0a0a;border-color:var(--bad)}
+.toast.ok{background:var(--ok);color:#06301f;border-color:var(--ok)}
+@keyframes tin{from{transform:translateY(10px);opacity:0}}
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+
+/* ---------- range selector (segmented) ---------- */
+.seg-top{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.seg-label{font-size:.85rem;color:var(--muted);font-weight:600}
+.seg-range{display:inline-flex;gap:6px;flex-wrap:wrap}
+.seg-range .srg{
+  background:transparent;border:1px solid var(--border);border-radius:10px;
+  padding:8px 13px;font-weight:700;font-size:.85rem;color:var(--muted);min-width:52px;
+}
+.seg-range .srg.active{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
+.seg-range .srg:not(.active):hover{color:var(--text);border-color:var(--accent)}
+.period-wrap{margin-bottom:22px}
+
+/* ---------- clickable identifiers ---------- */
+a.plink{color:var(--accent);font-weight:600;text-decoration:underline;text-underline-offset:3px}
+a.plink:hover{color:var(--text);text-decoration-color:var(--accent)}
+.midsub{font-size:.78rem}
+
+/* ---------- profile slide-over ---------- */
+#profileWrap{position:fixed;inset:0;z-index:40}
+#profileWrap[hidden]{display:none}
+.pf-scrim{position:absolute;inset:0;background:var(--scrim)}
+.pf-panel{
+  position:absolute;top:0;right:0;bottom:0;width:100%;max-width:920px;
+  background:var(--bg);border-left:1px solid var(--border);
+  display:flex;flex-direction:column;animation:pfIn .2s ease;
+}
+@keyframes pfIn{from{transform:translateX(56px);opacity:.5}}
+.pf-head{
+  flex:none;display:flex;align-items:center;gap:10px;padding:12px 16px;
+  background:color-mix(in srgb,var(--bg) 88%,transparent);backdrop-filter:blur(10px);
+  border-bottom:1px solid var(--border);
+}
+.pf-title{flex:1;font-weight:800;font-size:1.02rem;letter-spacing:-.01em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pf-body{flex:1;overflow-y:auto;padding:18px 16px 56px}
+.pf-hero{
+  background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);
+  padding:18px;display:flex;gap:16px;align-items:flex-start;margin-bottom:14px;
+}
+.pf-avatar{width:88px;height:88px;border-radius:50%;object-fit:cover;background:var(--surface-3);flex:none}
+.pf-avatar-fallback{
+  width:88px;height:88px;border-radius:50%;background:var(--surface-3);flex:none;
+  display:flex;align-items:center;justify-content:center;font-weight:800;font-size:2rem;color:var(--accent);
+}
+.pf-who{flex:1;min-width:0}
+.pf-who .nm{font-weight:800;font-size:1.25rem;letter-spacing:-.01em}
+.pf-who .rn{color:var(--muted);font-size:.9rem;margin-top:1px}
+.pf-who .id{color:var(--muted);font-size:.86rem;margin-top:4px}
+.pf-tags{display:flex;gap:6px;flex-wrap:wrap;margin-top:10px}
+.pf-sec{margin:22px 0 0}
+.pf-sec > h3{margin:0 0 10px;font-size:1rem}
+.pf-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px}
+.pf-stat{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:12px}
+.pf-stat .k{font-size:.72rem;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:5px}
+.pf-stat .v{font-size:1.12rem;font-weight:800;letter-spacing:-.01em;word-break:break-word}
+.pos{color:var(--ok)} .neg{color:var(--bad)}
+.badge.offline{color:var(--muted)}
+.kyc-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:10px}
+.kyc-doc{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:12px}
+.kyc-doc .doc-thumb{height:150px;margin-bottom:8px}
+.kyc-doc .rowline{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:6px}
+.kyc-doc .dtt{font-weight:700;font-size:.9rem}
+.kyc-doc .meta{font-size:.78rem;color:var(--muted)}
+.media-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(110px,1fr));gap:8px}
+.media-grid img{width:100%;height:110px;object-fit:cover;border-radius:10px;border:1px solid var(--border);cursor:zoom-in;background:var(--surface-2)}
+@media (max-width:520px){
+  .pf-hero{flex-direction:column;align-items:flex-start}
+}
+
+/* ---------- reports ---------- */
+.chart-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:2px 0 20px}
+.chart-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:16px;min-width:0}
+.chart-card h4{margin:0 0 8px;font-size:.95rem}
+.chart-svg{width:100%;height:auto;display:block}
+.ax-r{fill:var(--muted);font-size:10px;text-anchor:end}
+.ax-t{fill:var(--muted);font-size:10px;text-anchor:middle}
+.gridln{stroke:var(--border);stroke-width:1}
+.bar{fill:var(--accent)}
+.linep{fill:none;stroke:var(--ok);stroke-width:2.5;stroke-linejoin:round;stroke-linecap:round}
+.areaf{fill:var(--ok);opacity:.14}
+.linedot{fill:var(--ok)}
+@media (max-width:760px){.chart-grid{grid-template-columns:1fr}}
+.break-row{display:flex;align-items:center;gap:10px;padding:6px 0}
+.break-label{min-width:104px}
+.break-bar{flex:1;height:10px;background:var(--surface-3);border-radius:5px;overflow:hidden}
+.break-bar i{display:block;height:100%;background:var(--accent);border-radius:5px}
+.break-num{font-variant-numeric:tabular-nums;min-width:56px;text-align:right;font-weight:700}
+
+/* ---------- mobile: tables → stacked cards ---------- */
+@media (max-width:680px){
+  .stats{grid-template-columns:repeat(2,1fr)}
+  .stat .v{font-size:1.3rem}
+  .table-wrap{overflow:visible;background:transparent;border:none}
+  table,thead,tbody,tr,td{display:block;width:100%}
+  thead{display:none}
+  tbody{display:flex;flex-direction:column;gap:10px}
+  tbody tr{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:6px 4px}
+  tbody tr:hover{background:var(--surface)}
+  tbody td{
+    border:none;padding:7px 12px;display:flex;justify-content:space-between;align-items:baseline;
+    gap:12px;font-size:.9rem;
+  }
+  tbody td::before{content:attr(data-label);color:var(--muted);font-size:.78rem;flex:none;max-width:45%}
+  td.num{text-align:right}
+  .pager{border-radius:var(--radius);border:1px solid var(--border)}
+  .tabs button{min-width:calc(33.33% - 4px);flex:1 1 calc(33.33% - 4px)}
+}
+</style>
+</head>
+<body>
+
+<!-- ============ LOGIN ============ -->
+<div id="login" class="login-wrap">
+  <form id="loginForm" class="login-card" autocomplete="off">
+    <h1>MinuteMate <span>Admin</span></h1>
+    <p class="sub">Enter the admin secret to unlock the dashboard.</p>
+    <div id="loginError" class="error" hidden></div>
+    <label>Admin secret
+      <input type="password" id="secretInput" name="admin-secret" autocomplete="current-password"
+             placeholder="Paste the admin secret" required spellcheck="false" />
+    </label>
+    <button type="submit" class="btn primary block" id="unlockBtn">Unlock dashboard</button>
+    <p class="hint">The secret is never stored on this page — it's kept only in this tab's memory while you work, and cleared when you log out or close the tab.</p>
+  </form>
+</div>
+
+<!-- ============ APP ============ -->
+<div id="app" hidden>
+  <header class="topbar">
+    <div class="toprow">
+      <div class="brand">MinuteMate <span>Admin</span></div>
+      <div class="top-actions">
+        <button class="btn ghost sm" data-act="logout">Log out</button>
+      </div>
+    </div>
+    <nav class="tabs" id="tabs" aria-label="Dashboard sections">
+      <button data-tab="overview" class="active">Overview</button>
+      <button data-tab="users">Users</button>
+      <button data-tab="creators">Creators</button>
+      <button data-tab="calls">Calls</button>
+      <button data-tab="approvals">Approvals <span class="count-pill" id="badgeApprovals" hidden></span></button>
+      <button data-tab="kyc">KYC <span class="count-pill" id="badgeKyc" hidden></span></button>
+      <button data-tab="reports">Reports</button>
+    </nav>
+  </header>
+  <main id="content" aria-live="polite"></main>
+</div>
+
+<div id="modalWrap" hidden></div>
+<div id="profileWrap" hidden></div>
+<div id="toastWrap" aria-live="polite"></div>
+
+<script>
+'use strict';
+/* =============================================
+   MinuteMate Admin Dashboard — talks directly to
+   the backend API. No secret is ever hardcoded;
+   the admin enters it on the login screen and it
+   lives only in this tab's memory.
+   ============================================= */
+const API = 'https://minutemate-api-9pb0.onrender.com';
+const RS_PER_100 = 100;
+const TZ = 'Asia/Kolkata';
+
+let SECRET = null;
+let currentTab = 'overview';
+let pendingModal = null;
+
+const state = {
+  users:    { search:'', limit:20, offset:0 },
+  creators: { search:'', limit:20, offset:0 },
+  calls:    { status:'', limit:20, offset:0 },
+  kyc:      { status:'pending', limit:20, offset:0 },
+  overview: { range:'all' },
+  reports:  { range:'1w' },
+};
+
+const $ = (s, r) => (r||document).querySelector(s);
+const content = $('#content');
+
+/* ---------- helpers ---------- */
+function esc(v){
+  if (v == null) return '';
+  return String(v).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+function inr(paise){
+  const n = (Number(paise) || 0) / RS_PER_100;
+  return '₹' + n.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+function fmtDur(sec){
+  sec = Math.max(0, Math.round(Number(sec) || 0));
+  const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = sec % 60;
+  if (h) return h + 'h ' + String(m).padStart(2,'0') + 'm';
+  if (m) return m + 'm ' + String(s).padStart(2,'0') + 's';
+  return s + 's';
+}
+function fmtDate(iso){
+  if (!iso) return '—';
+  const d = new Date(iso);
+  if (isNaN(d)) return esc(iso);
+  return d.toLocaleString('en-GB', { timeZone: TZ, day:'numeric', month:'short', hour:'2-digit', minute:'2-digit', hour12:false });
+}
+function fmtDateFull(iso){
+  if (!iso) return '—';
+  const d = new Date(iso);
+  if (isNaN(d)) return esc(iso);
+  return d.toLocaleString('en-GB', { timeZone: TZ, day:'numeric', month:'short', year:'numeric', hour:'2-digit', minute:'2-digit', hour12:false });
+}
+function nowStamp(){
+  return new Date().toLocaleString('en-GB', { timeZone: TZ, hour:'2-digit', minute:'2-digit', second:'2-digit', hour12:false });
+}
+function setStamp(){ const el = $('#updStamp'); if (el) el.textContent = 'Updated ' + nowStamp(); }
+
+const B_OK = ['approved','completed','active','online','succeeded','paid'];
+const B_WARN = ['pending','processing','in_review'];
+const B_BAD = ['rejected','failed','missed','suspended','blocked','cancelled','expired'];
+const B_INFO = ['in_progress','ongoing','ringing','live'];
+function badgeClass(s){
+  s = String(s || '').toLowerCase();
+  if (B_OK.includes(s)) return 'ok';
+  if (B_WARN.includes(s)) return 'warn';
+  if (B_BAD.includes(s)) return 'bad';
+  if (B_INFO.includes(s)) return 'info';
+  return '';
+}
+function cap(s){ return s == null || s === '' ? '—' : String(s).charAt(0).toUpperCase() + String(s).slice(1).replace(/_/g,' '); }
+function badge(s, emptyDash){
+  if ((s == null || s === '') && (emptyDash === undefined || emptyDash)) return '<span class="muted">—</span>';
+  const t = cap(s);
+  return '<span class="badge ' + badgeClass(s) + '"><span class="dot"></span>' + esc(t) + '</span>';
+}
+function onlineDot(on){
+  return on
+    ? '<span class="dot-online on"><i></i>Online</span>'
+    : '<span class="dot-online off"><i></i>Offline</span>';
+}
+function initials(name){
+  return (String(name || '?').trim().charAt(0) || '?').toUpperCase();
+}
+
+/* ---------- range selector + profile/report helpers ---------- */
+const OV_RANGES = [['1h','1H'],['1d','1D'],['1w','1W'],['1m','1M'],['1y','1Y'],['all','All']];
+const REP_RANGES = [['1h','1H'],['1d','1D'],['1w','1W'],['1m','1M'],['1y','1Y']];
+const RANGE_LABEL = { '1h':'last hour', '1d':'last 24 hours', '1w':'last 7 days', '1m':'last 30 days', '1y':'last 12 months', 'all':'all time' };
+function segRangeHtml(act, current, ranges){
+  return '<div class="seg-range" role="group" aria-label="Time range">' + ranges.map(r =>
+    '<button type="button" class="srg' + (current === r[0] ? ' active' : '') + '" data-act="' + act + '" data-range="' + r[0] + '">' + r[1] + '</button>'
+  ).join('') + '</div>';
+}
+function setSegActive(act, val){
+  document.querySelectorAll('.seg-range [data-act="' + act + '"]').forEach(b =>
+    b.classList.toggle('active', b.dataset.range === val));
+}
+function signedInr(paise){
+  const v = Number(paise) || 0;
+  const sign = v < 0 ? '−' : (v > 0 ? '+' : '');
+  return sign + inr(Math.abs(v));
+}
+function inrCompact(paise){
+  const n = Math.abs((Number(paise) || 0) / 100);
+  const trim = (v, unit) => '₹' + (Math.round(v * 10) / 10).toLocaleString('en-IN') + unit;
+  if (n >= 1e7) return trim(n / 1e7, ' Cr');
+  if (n >= 1e5) return trim(n / 1e5, ' L');
+  if (n >= 1e3) return trim(n / 1e3, 'K');
+  return '₹' + String(Math.round(n));
+}
+function numFmt(n){ return (Number(n) || 0).toLocaleString('en-IN'); }
+function onOffBadge(enabled, label){
+  return '<span class="badge ' + (enabled ? 'ok' : '') + '">' + esc(label) + ' ' + (enabled ? 'ON' : 'OFF') + '</span>';
+}
+function onlineBadge(on){
+  return '<span class="badge ' + (on ? 'ok' : 'offline') + '"><span class="dot"></span>' + (on ? 'Online' : 'Offline') + '</span>';
+}
+function pfStat(k, v){ return '<div class="pf-stat"><div class="k">' + k + '</div><div class="v">' + v + '</div></div>'; }
+/* Clickable identity link (opens profile); plain text fallback when id missing. labelHtml must already be escaped. */
+function idLink(kind, id, labelHtml, cls){
+  if (!id) return '<span class="' + (cls || '') + '">' + labelHtml + '</span>';
+  return '<a href="#" class="plink ' + (cls || '') + '" data-act="profile-' + kind + '" data-id="' + esc(id) + '">' + labelHtml + '</a>';
+}
+function avatarImg(url, name, big){
+  const nm = initials(name);
+  const cls = big ? 'pf-avatar' : 'avatar';
+  const fcls = big ? 'pf-avatar-fallback' : 'avatar-fallback';
+  if (!url) return '<span class="' + fcls + '">' + esc(nm) + '</span>';
+  return '<img class="' + cls + '" src="' + esc(url) + '" alt="" loading="lazy" ' +
+    'onerror="this.outerHTML=\'<span class=&quot;' + fcls + '&quot;&gt;' + esc(nm) + '&lt;/span&gt;\'" />';
+}
+
+/* ---------- API ---------- */
+async function api(path, opts){
+  opts = opts || {};
+  const url = new URL(API + path);
+  const p = opts.params || {};
+  for (const k of Object.keys(p)){
+    if (p[k] !== '' && p[k] != null) url.searchParams.set(k, p[k]);
+  }
+  url.searchParams.set('adminSecret', SECRET);
+  let res;
+  try {
+    res = await fetch(url.toString(), {
+      method: opts.method || 'GET',
+      headers: opts.body ? { 'Content-Type':'application/json' } : {},
+      body: opts.body ? JSON.stringify(opts.body) : undefined,
+    });
+  } catch (e) {
+    const err = new Error('Network unreachable. The server may be waking up — retry in about 30 seconds.');
+    err.code = 'network';
+    throw err;
+  }
+  if (res.status === 403){
+    throw { code:'auth', message:'The admin secret was rejected (wrong secret). Please unlock again.' };
+  }
+  let data = {};
+  try { data = await res.json(); } catch (e) { /* non-json */ }
+  if (!res.ok){
+    const err = new Error((data && data.error) || ('Request failed (HTTP ' + res.status + ')'));
+    err.code = 'http';
+    throw err;
+  }
+  return data;
+}
+
+function onApiError(err, retryFn){
+  if (err && err.code === 'auth'){
+    doLogout(true);
+    toast(err.message, 'bad');
+  } else if (err && err.code === 'network'){
+    content.innerHTML = errorPanel('Server unreachable',
+      'Could not reach the API. If the server was asleep it usually wakes in ~30 seconds.',
+      'Retry', retryFn);
+    wireRetry(retryFn);
+  } else {
+    content.innerHTML = errorPanel('Something went wrong', esc(err.message || 'Unexpected error'), 'Retry', retryFn);
+    wireRetry(retryFn);
+  }
+}
+
+/* ---------- generic UI ---------- */
+function tabHead(title, extraHtml){
+  return '<div class="tabhead"><h2>' + esc(title) + '</h2>' +
+    '<div class="tabhead-r"><span class="updated" id="updStamp"></span>' +
+    '<button class="btn ghost sm" data-act="refresh">Refresh</button></div></div>' +
+    (extraHtml || '');
+}
+function loadingPanel(label){
+  return '<div class="panel"><div class="spinner"></div><h3>Loading ' + esc(label || '') + '…</h3><p>Talking to the server…</p></div>';
+}
+function emptyPanel(title, body){
+  return '<div class="panel"><h3>' + esc(title) + '</h3><p>' + esc(body) + '</p></div>';
+}
+function errorPanel(title, body){
+  return '<div class="panel"><h3>' + esc(title) + '</h3><p>' + body + '</p>' +
+    '<button class="btn" data-act="retry">Retry</button></div>';
+}
+function wireRetry(){ /* retries are dispatched via data-act="retry" delegation */ }
+function toast(msg, kind){
+  const t = document.createElement('div');
+  t.className = 'toast ' + (kind || '');
+  t.textContent = msg;
+  $('#toastWrap').appendChild(t);
+  setTimeout(() => { t.style.opacity = '0'; setTimeout(() => t.remove(), 250); }, 3200);
+}
+function pagerHtml(total, limit, offset){
+  const from = total === 0 ? 0 : offset + 1;
+  const to = Math.min(offset + limit, total);
+  const page = total === 0 ? 0 : Math.floor(offset / limit) + 1;
+  const pages = Math.max(1, Math.ceil(total / limit));
+  return '<div class="pager"><span class="info">Showing ' + from + '–' + to + ' of ' + total +
+    ' · Page ' + page + ' of ' + pages + '</span>' +
+    '<div class="btns">' +
+    '<button class="btn sm" data-act="prev"' + (offset <= 0 ? ' disabled' : '') + '>‹ Prev</button>' +
+    '<button class="btn sm" data-act="next"' + (offset + limit >= total ? ' disabled' : '') + '>Next ›</button>' +
+    '</div></div>';
+}
+
+/* ---------- modal ---------- */
+function openModal(o){
+  pendingModal = o;
+  const w = $('#modalWrap');
+  w.innerHTML =
+    '<div class="scrim" data-act="modal-close"></div>' +
+    '<div class="sheet" role="dialog" aria-modal="true" aria-label="' + esc(o.title) + '">' +
+      '<h3>' + esc(o.title) + '</h3>' +
+      (o.body ? '<p>' + o.body + '</p>' : '') +
+      (o.html ? o.html : '') +
+      '<div class="row">' +
+        '<button class="btn ghost" data-act="modal-close">' + esc(o.cancelLabel || 'Cancel') + '</button>' +
+        (o.primary ? '<button class="btn ' + esc(o.primary.kind || '') + '" data-act="modal-primary" id="modalPrimary">' + esc(o.primary.label) + '</button>' : '') +
+      '</div>' +
+    '</div>';
+  w.hidden = false;
+}
+function closeModal(){ $('#modalWrap').hidden = true; $('#modalWrap').innerHTML = ''; pendingModal = null; }
+document.addEventListener('keydown', e => {
+  if (e.key !== 'Escape') return;
+  if (!$('#modalWrap').hidden) closeModal();
+  else if (!$('#profileWrap').hidden) closeProfile();
+});
+
+/* ---------- auth ---------- */
+function showLogin(msg){
+  SECRET = null;
+  $('#app').hidden = true;
+  $('#login').hidden = false;
+  const err = $('#loginError');
+  if (msg){ err.textContent = msg; err.hidden = false; } else { err.hidden = true; err.textContent = ''; }
+  const inp = $('#secretInput');
+  inp.value = '';
+  setTimeout(() => inp.focus(), 30);
+}
+function doLogout(from403){
+  closeModal();
+  showLogin(from403 ? undefined : null);
+}
+$('#loginForm').addEventListener('submit', e => {
+  e.preventDefault();
+  const v = $('#secretInput').value.trim();
+  if (!v) return;
+  SECRET = v;
+  $('#login').hidden = true;
+  $('#app').hidden = false;
+  for (const b of document.querySelectorAll('#tabs [data-tab]')) b.classList.toggle('active', b.dataset.tab === 'overview');
+  currentTab = 'overview';
+  loadOverview();
+  loadBadges();
+});
+
+/* ---------- tab routing ---------- */
+function gotoTab(name){
+  currentTab = name;
+  for (const b of document.querySelectorAll('#tabs [data-tab]')) b.classList.toggle('active', b.dataset.tab === name);
+  if (name === 'overview') loadOverview();
+  else if (name === 'users') loadUsers();
+  else if (name === 'creators') loadCreators();
+  else if (name === 'calls') loadCalls();
+  else if (name === 'approvals') loadApprovals();
+  else if (name === 'kyc') loadKyc();
+  else if (name === 'reports') loadReports();
+}
+function reloadCurrent(){
+  loadBadges();
+  gotoTab(currentTab);
+}
+async function loadBadges(){
+  try {
+    const [stats, kycP] = await Promise.all([
+      api('/api/admin/dashboard/stats'),
+      api('/api/admin/dashboard/kyc', { params: { status:'pending', limit:1, offset:0 } }),
+    ]);
+    const a = Number(stats.pendingApprovals || 0), k = Number(kycP.total || 0);
+    const ba = $('#badgeApprovals'), bk = $('#badgeKyc');
+    ba.hidden = a <= 0; ba.textContent = a > 99 ? '99+' : a;
+    bk.hidden = k <= 0; bk.textContent = k > 99 ? '99+' : k;
+  } catch (e) { /* badges are best-effort; silent */ }
+}
+
+/* ---------- OVERVIEW (with time filters) ---------- */
+async function loadOverview(){
+  const s = state.overview;
+  content.innerHTML = tabHead('Overview',
+      '<div class="controls"><div class="seg-top"><span class="seg-label">Period</span>' +
+      segRangeHtml('ov-range', s.range, OV_RANGES) + '</div></div>') +
+    '<div id="dataWrap">' + loadingPanel('overview') + '</div>';
+  updateOverview();
+}
+async function updateOverview(){
+  const s = state.overview;
+  const wrap = $('#dataWrap');
+  if (!wrap) return;
+  wrap.innerHTML = loadingPanel('overview');
+  const params = s.range === 'all' ? {} : { range: s.range };
+  try {
+    const [stats, callsData] = await Promise.all([
+      api('/api/admin/dashboard/stats', { params }),
+      api('/api/admin/dashboard/calls', { params: { limit:10, offset:0 } }),
+    ]);
+    let html = '';
+    if (stats.period){
+      const p = stats.period;
+      const pcards = [
+        ['Calls', esc(numFmt(p.calls)), ''],
+        ['Revenue', esc(inr(p.revenuePaise)), 'accent'],
+        ['Minutes', esc(numFmt(p.minutes)), ''],
+        ['New users', esc(numFmt(p.newUsers)), ''],
+        ['New creators', esc(numFmt(p.newCreators)), ''],
+      ];
+      html += '<div class="period-wrap"><div class="subhead"><span class="period-title">This period</span>' +
+        '<span class="period-sub">' + esc(cap(RANGE_LABEL[s.range] || '')) + '</span></div>' +
+        '<div class="stats" style="margin-bottom:0">' + pcards.map(c =>
+          '<div class="stat ' + c[2] + '"><div class="k">' + c[0] + '</div><div class="v">' + c[1] + '</div></div>'
+        ).join('') + '</div></div>' +
+        '<div class="subhead"><span class="period-title">All time</span></div>';
+    }
+    const cards = [
+      ['Total Users', esc(String(stats.totalUsers != null ? stats.totalUsers : '—')), ''],
+      ['Total Creators', esc(String(stats.totalCreators != null ? stats.totalCreators : '—')), ''],
+      ['Total Calls', esc(String(stats.totalCalls != null ? stats.totalCalls : '—')), ''],
+      ['Total Revenue', esc(inr(stats.totalRevenuePaise)), 'accent'],
+      ['Active Calls', esc(String(stats.activeCalls != null ? stats.activeCalls : 0)), ''],
+      ['Pending Approvals', esc(String(stats.pendingApprovals != null ? stats.pendingApprovals : 0)), Number(stats.pendingApprovals) > 0 ? 'accent' : ''],
+    ];
+    html += '<div class="stats">' + cards.map(c =>
+        '<div class="stat ' + c[2] + '"><div class="k">' + c[0] + '</div><div class="v">' + c[1] + '</div></div>'
+      ).join('') + '</div>' +
+      '<div class="subhead"><h3>Recent calls</h3><button class="btn ghost sm" data-act="goto-calls">View all</button></div>';
+    const calls = callsData.calls || [];
+    if (!calls.length){
+      html += emptyPanel('No calls yet', 'Call history will appear here once calls are placed.');
+    } else {
+      html += '<div class="table-wrap"><table><thead><tr>' +
+        '<th>User</th><th>Creator</th><th>Type</th><th>Status</th>' +
+        '<th class="num">Duration</th><th class="num">Cost</th><th class="num">When</th>' +
+        '</tr></thead><tbody>' +
+        calls.map(callRow).join('') +
+        '</tbody></table></div>';
+    }
+    wrap.innerHTML = html;
+    setStamp();
+  } catch (e){
+    if (e && e.code === 'auth'){ onApiError(e); return; }
+    if (e && e.code === 'network') wrap.innerHTML = errorPanel('Server unreachable', 'Could not reach the API. If the server was asleep it usually wakes in ~30 seconds.');
+    else wrap.innerHTML = errorPanel('Something went wrong', esc(e.message || 'Unexpected error'));
+  }
+}
+
+/* ---------- USERS ---------- */
+async function loadUsers(){
+  const s = state.users;
+  content.innerHTML = tabHead('Users',
+      '<div class="controls"><input type="search" id="usersSearch" placeholder="Search phone, name, or member ID…" value="' + esc(s.search) + '" /></div>') +
+    '<div id="dataWrap">' + loadingPanel('users') + '</div>';
+  let t; $('#usersSearch').addEventListener('input', e => {
+    clearTimeout(t);
+    t = setTimeout(() => { state.users.search = e.target.value.trim(); state.users.offset = 0; updateUsers(); }, 450);
+  });
+  updateUsers();
+}
+async function updateUsers(){
+  const s = state.users;
+  const wrap = $('#dataWrap');
+  if (!wrap) return;
+  wrap.innerHTML = loadingPanel('users');
+  try {
+    const d = await api('/api/admin/dashboard/users', { params: { limit:s.limit, offset:s.offset, search:s.search } });
+    const rows = d.users || [];
+    if (!rows.length){
+      wrap.innerHTML = emptyPanel(s.search ? 'No users match "' + s.search + '"' : 'No users yet',
+        s.search ? 'Try a different phone, name, or member ID.' : 'Users will appear here once they sign up.');
+    } else {
+      wrap.innerHTML = '<div class="table-wrap"><table><thead><tr>' +
+        '<th>Phone</th><th>Name</th><th>Member ID</th><th>Status</th>' +
+        '<th class="num">Wallet ₹</th><th class="num">Calls</th><th class="num">Spent ₹</th><th class="num">Joined</th>' +
+        '</tr></thead><tbody>' +
+        rows.map(u =>
+          '<tr>' +
+          '<td data-label="Phone">' + idLink('user', u.id, '<span class="mono">' + esc(u.phone || '—') + '</span>') + '</td>' +
+          '<td data-label="Name">' + esc(u.name || '—') + '</td>' +
+          '<td data-label="Member ID">' + idLink('user', u.id, '<span class="mono">' + esc(u.memberId || '—') + '</span>') + '</td>' +
+          '<td data-label="Status">' + badge(u.status) + '</td>' +
+          '<td class="num" data-label="Wallet ₹">' + esc(inr(u.balancePaise)) + '</td>' +
+          '<td class="num" data-label="Calls">' + esc(String(u.totalCalls != null ? u.totalCalls : 0)) + '</td>' +
+          '<td class="num" data-label="Spent ₹">' + esc(inr(u.totalSpentPaise)) + '</td>' +
+          '<td class="num" data-label="Joined">' + esc(fmtDate(u.createdAt)) + '</td>' +
+          '</tr>'
+        ).join('') +
+        '</tbody></table>' + pagerHtml(d.total || 0, d.limit || s.limit, d.offset != null ? d.offset : s.offset) + '</div>';
+    }
+    setStamp();
+  } catch (e){
+    if (e && e.code === 'auth'){ onApiError(e); return; }
+    if (e && e.code === 'network') wrap.innerHTML = errorPanel('Server unreachable', 'Could not reach the API. If the server was asleep it usually wakes in ~30 seconds.');
+    else wrap.innerHTML = errorPanel('Something went wrong', esc(e.message || 'Unexpected error'));
+  }
+}
+
+/* ---------- CREATORS ---------- */
+async function loadCreators(){
+  const s = state.creators;
+  content.innerHTML = tabHead('Creators',
+      '<div class="controls"><input type="search" id="creatorsSearch" placeholder="Search phone, name, or member ID…" value="' + esc(s.search) + '" /></div>') +
+    '<div id="dataWrap">' + loadingPanel('creators') + '</div>';
+  let t; $('#creatorsSearch').addEventListener('input', e => {
+    clearTimeout(t);
+    t = setTimeout(() => { state.creators.search = e.target.value.trim(); state.creators.offset = 0; updateCreators(); }, 450);
+  });
+  updateCreators();
+}
+async function updateCreators(){
+  const s = state.creators;
+  const wrap = $('#dataWrap');
+  if (!wrap) return;
+  wrap.innerHTML = loadingPanel('creators');
+  try {
+    const d = await api('/api/admin/dashboard/creators', { params: { limit:s.limit, offset:s.offset, search:s.search } });
+    const rows = d.creators || [];
+    if (!rows.length){
+      wrap.innerHTML = emptyPanel(s.search ? 'No creators match "' + s.search + '"' : 'No creators yet',
+        s.search ? 'Try a different phone, name, or member ID.' : 'Creators will appear here once they sign up.');
+    } else {
+      wrap.innerHTML = '<div class="table-wrap"><table><thead><tr>' +
+        '<th>Name</th><th>Phone</th><th class="num">Rate /min</th><th>Online</th><th>Verification</th><th>KYC</th>' +
+        '<th class="num">Rating</th><th class="num">Calls</th><th class="num">Earnings ₹</th><th class="num">Lifetime ₹</th>' +
+        '</tr></thead><tbody>' +
+        rows.map(c => {
+          const r = Number(c.rating);
+          const rating = isFinite(r) ? r.toFixed(1) + (c.ratingCount ? ' (' + c.ratingCount + ')' : '') : '—';
+          const midHtml = c.memberId ? idLink('creator', c.id, esc(c.memberId), 'mono muted midsub') : '';
+          return '<tr>' +
+          '<td data-label="Name">' + esc(c.name || '—') + (midHtml ? '<br>' + midHtml : '') + '</td>' +
+          '<td data-label="Phone">' + idLink('creator', c.id, '<span class="mono">' + esc(c.phone || '—') + '</span>') + '</td>' +
+          '<td class="num" data-label="Rate /min">' + esc(inr(c.ratePaisePerMin)) + '</td>' +
+          '<td data-label="Online">' + onlineDot(!!c.isOnline) + '</td>' +
+          '<td data-label="Verification">' + badge(c.verificationStatus) + '</td>' +
+          '<td data-label="KYC">' + badge(c.kycStatus) + '</td>' +
+          '<td class="num" data-label="Rating">' + esc(rating) + '</td>' +
+          '<td class="num" data-label="Calls">' + esc(String(c.totalCalls != null ? c.totalCalls : 0)) + '</td>' +
+          '<td class="num" data-label="Earnings ₹">' + esc(inr(c.earningsBalancePaise)) + '</td>' +
+          '<td class="num" data-label="Lifetime ₹">' + esc(inr(c.lifetimeEarningsPaise)) + '</td>' +
+          '</tr>';
+        }).join('') +
+        '</tbody></table>' + pagerHtml(d.total || 0, d.limit || s.limit, d.offset != null ? d.offset : s.offset) + '</div>';
+    }
+    setStamp();
+  } catch (e){
+    if (e && e.code === 'auth'){ onApiError(e); return; }
+    if (e && e.code === 'network') wrap.innerHTML = errorPanel('Server unreachable', 'Could not reach the API. If the server was asleep it usually wakes in ~30 seconds.');
+    else wrap.innerHTML = errorPanel('Something went wrong', esc(e.message || 'Unexpected error'));
+  }
+}
+
+/* ---------- CALLS ---------- */
+const CALL_STATUSES = ['all','completed','ongoing','in_progress','ringing','missed','rejected','failed','cancelled'];
+async function loadCalls(){
+  const s = state.calls;
+  content.innerHTML = tabHead('Calls',
+      '<div class="controls"><select id="callsStatus" aria-label="Filter by status">' +
+        CALL_STATUSES.map(st =>
+          '<option value="' + (st === 'all' ? '' : st) + '"' + ((s.status || '') === (st === 'all' ? '' : st) ? ' selected' : '') + '>' +
+          (st === 'all' ? 'All statuses' : cap(st)) + '</option>'
+        ).join('') +
+      '</select></div>') +
+    '<div id="dataWrap">' + loadingPanel('calls') + '</div>';
+  $('#callsStatus').addEventListener('change', e => { state.calls.status = e.target.value; state.calls.offset = 0; updateCalls(); });
+  updateCalls();
+}
+function callRow(c){
+  return '<tr>' +
+    '<td data-label="User">' + esc(c.userName || ('#' + (c.userId || '—'))) + '</td>' +
+    '<td data-label="Creator">' + esc(c.creatorName || ('#' + (c.creatorId || '—'))) + '</td>' +
+    '<td data-label="Type">' + esc(cap(c.type)) + '</td>' +
+    '<td data-label="Status">' + badge(c.status) + '</td>' +
+    '<td class="num" data-label="Duration"><span class="mono">' + esc(fmtDur(c.durationSec)) + '</span></td>' +
+    '<td class="num" data-label="Cost ₹">' + esc(inr(c.costPaise)) + '</td>' +
+    '<td class="num" data-label="Date">' + esc(fmtDate(c.startedAt || c.createdAt)) + '</td>' +
+  '</tr>';
+}
+async function updateCalls(){
+  const s = state.calls;
+  const wrap = $('#dataWrap');
+  if (!wrap) return;
+  wrap.innerHTML = loadingPanel('calls');
+  try {
+    const d = await api('/api/admin/dashboard/calls', { params: { limit:s.limit, offset:s.offset, status:s.status } });
+    const rows = d.calls || [];
+    if (!rows.length){
+      wrap.innerHTML = emptyPanel('No calls' + (s.status ? ' with status "' + s.status + '"' : '') + ' yet',
+        'Call history will appear here once calls are placed.');
+    } else {
+      wrap.innerHTML = '<div class="table-wrap"><table><thead><tr>' +
+        '<th>User</th><th>Creator</th><th>Type</th><th>Status</th>' +
+        '<th class="num">Duration</th><th class="num">Cost ₹</th><th class="num">Date</th>' +
+        '</tr></thead><tbody>' +
+        rows.map(callRow).join('') +
+        '</tbody></table>' + pagerHtml(d.total || 0, d.limit || s.limit, d.offset != null ? d.offset : s.offset) + '</div>';
+    }
+    setStamp();
+  } catch (e){
+    if (e && e.code === 'auth'){ onApiError(e); return; }
+    if (e && e.code === 'network') wrap.innerHTML = errorPanel('Server unreachable', 'Could not reach the API. If the server was asleep it usually wakes in ~30 seconds.');
+    else wrap.innerHTML = errorPanel('Something went wrong', esc(e.message || 'Unexpected error'));
+  }
+}
+
+/* ---------- APPROVALS ---------- */
+/* Field may be an array, a JSON-encoded array string, or a comma-separated string. */
+function jsonArr(v){
+  if (Array.isArray(v)) return v.filter(Boolean);
+  if (typeof v === 'string'){
+    const s = v.trim();
+    if (s.startsWith('[')){
+      try { const j = JSON.parse(s); return Array.isArray(j) ? j.map(String).filter(Boolean) : [v]; } catch(e){}
+    }
+    return s ? [v] : [];
+  }
+  return (v == null || v === '') ? [] : [String(v)];
+}
+function tagList(v){
+  if (typeof v === 'string' && v.indexOf(',') > -1) return v.split(',').map(x => x.trim()).filter(Boolean);
+  return jsonArr(v);
+}
+function tagRow(arr){
+  if (!arr || !arr.length) return '<span class="muted">—</span>';
+  return '<span class="tagrow">' + arr.map(x => '<span class="tag">' + esc(String(x)) + '</span>').join('') + '</span>';
+}
+async function loadApprovals(){
+  content.innerHTML = tabHead('Approvals') + loadingPanel('approvals');
+  const reload = loadApprovals;
+  try {
+    const d = await api('/api/admin/dashboard/approvals', { params: { limit:100, offset:0 } });
+    const rows = d.approvals || [];
+    if (!rows.length){
+      content.innerHTML = tabHead('Approvals') +
+        emptyPanel('Queue is empty', 'New creator applications will land here for review, oldest first.');
+      setStamp();
+      return;
+    }
+    let html = tabHead('Approvals') + '<div class="cards">' + rows.map(a => {
+      const avatar = a.avatarUrl
+        ? '<img class="avatar" src="' + esc(a.avatarUrl) + '" alt="" loading="lazy" onerror="this.outerHTML=\'<span class=&quot;avatar-fallback&quot;&gt;' + esc(initials(a.name)) + '</span>\'" />'
+        : '<span class="avatar-fallback">' + esc(initials(a.name)) + '</span>';
+      const docs = a.pendingKycDocs && a.pendingKycDocs.length
+        ? a.pendingKycDocs.map(x => esc(x.docType || x)).join(', ')
+        : '—';
+      return '<div class="card">' +
+        '<div class="who">' + avatar +
+          '<div><div class="nm">' + esc(a.name || 'Unnamed') + '</div>' +
+          '<div class="ph mono">' + esc(a.phone || '—') + (a.memberId ? ' · ' + esc(a.memberId) : '') + '</div></div>' +
+        '</div>' +
+        (a.bio ? '<p class="bio">' + esc(a.bio) + '</p>' : '') +
+        '<dl class="kv">' +
+          '<dt>Rate</dt><dd>' + esc(inr(a.ratePaisePerMin)) + ' /min</dd>' +
+          '<dt>Applied</dt><dd>' + esc(fmtDateFull(a.appliedAt)) + '</dd>' +
+          '<dt>KYC</dt><dd>' + badge(a.kycStatus) + '</dd>' +
+          '<dt>KYC docs</dt><dd>' + docs + '</dd>' +
+          (a.talksAbout ? '<dt>Talks about</dt><dd>' + esc(a.talksAbout) + '</dd>' : '') +
+          (a.hobbies ? '<dt>Hobbies</dt><dd>' + esc(a.hobbies) + '</dd>' : '') +
+        '</dl>' +
+        '<div class="kv"><dt>Languages</dt><dd>' + tagRow(a.languages) + '</dd></div>' +
+        '<div class="kv"><dt>Call types</dt><dd>' + tagRow(a.allowedCallTypes) + '</dd></div>' +
+        '<div class="actions">' +
+          '<button class="btn ok" data-act="apprv-open" data-id="' + esc(a.id) + '" data-name="' + esc(a.name || '') + '">Approve</button>' +
+          '<button class="btn danger" data-act="rjct-open" data-id="' + esc(a.id) + '" data-name="' + esc(a.name || '') + '">Reject</button>' +
+        '</div>' +
+      '</div>';
+    }).join('') + '</div>';
+    content.innerHTML = html;
+    setStamp();
+  } catch (e){ onApiError(e, reload); }
+}
+function openApprovalConfirm(decision, id, name){
+  const isApprove = decision === 'approve';
+  openModal({
+    title: (isApprove ? 'Approve creator' : 'Reject creator'),
+    body: 'Are you sure you want to <strong>' + (isApprove ? 'approve' : 'reject') + '</strong> <strong>' + esc(name || 'this creator') + '</strong>' +
+      (isApprove ? ' and let them go live?' : '? They will not be able to receive calls.'),
+    primary: { label: isApprove ? 'Approve' : 'Reject', kind: isApprove ? 'ok' : 'danger' },
+    onPrimary: () => doCreatorDecision(decision, id, name),
+  });
+}
+async function doCreatorDecision(decision, id, name){
+  const btn = $('#modalPrimary');
+  if (btn){ btn.disabled = true; btn.textContent = 'Working…'; }
+  try {
+    await api('/api/admin/dashboard/creators/' + encodeURIComponent(id) + '/decision',
+      { method:'POST', body: { decision } });
+    closeModal();
+    toast((decision === 'approve' ? 'Approved ' : 'Rejected ') + (name || 'creator'), decision === 'approve' ? 'ok' : 'bad');
+    loadBadges();
+    loadApprovals();
+  } catch (e){
+    closeModal();
+    if (e && e.code === 'auth'){ onApiError(e); } else toast(e.message || 'Decision failed', 'bad');
+  }
+}
+
+/* ---------- KYC ---------- */
+async function loadKyc(){
+  const s = state.kyc;
+  content.innerHTML = tabHead('KYC requests',
+      '<div class="controls"><select id="kycStatus" aria-label="Filter by status">' +
+        ['pending','approved','rejected'].map(st =>
+          '<option value="' + st + '"' + (s.status === st ? ' selected' : '') + '>' + cap(st) + '</option>'
+        ).join('') +
+      '</select></div>') +
+    '<div id="dataWrap">' + loadingPanel('KYC requests') + '</div>';
+  $('#kycStatus').addEventListener('change', e => { state.kyc.status = e.target.value; state.kyc.offset = 0; updateKyc(); });
+  updateKyc();
+}
+async function updateKyc(){
+  const s = state.kyc;
+  const wrap = $('#dataWrap');
+  if (!wrap) return;
+  wrap.innerHTML = loadingPanel('KYC requests');
+  try {
+    const d = await api('/api/admin/dashboard/kyc', { params: { limit:s.limit, offset:s.offset, status:s.status } });
+    const rows = d.submissions || [];
+    if (!rows.length){
+      wrap.innerHTML = emptyPanel('No ' + s.status + ' requests',
+        s.status === 'pending' ? 'New document submissions will appear here for review.' : 'No KYC requests with this status.');
+      setStamp();
+      return;
+    }
+    wrap.innerHTML = '<div class="cards">' + rows.map(k => {
+      const thumb = k.docUrl
+        ? '<img class="doc-thumb" src="' + esc(k.docUrl) + '" alt="Identity document submitted by ' + esc(k.creatorName || 'creator') + '" loading="lazy" data-act="kyc-zoom" data-id="' + esc(k.id) + '" data-name="' + esc(k.creatorName || '') + '" onerror="this.outerHTML=\'<span class=&quot;doc-thumb missing&quot;&gt;Document image could not be loaded</span>\'" />'
+        : '<span class="doc-thumb missing">No document image</span>';
+      const note = k.reviewerNote ? '<p class="bio">Reviewer note: ' + esc(k.reviewerNote) + '</p>' : '';
+      const actions = k.status === 'pending'
+        ? '<div class="actions">' +
+            '<button class="btn ok" data-act="kyc-apprv-open" data-id="' + esc(k.id) + '" data-name="' + esc(k.creatorName || '') + '">Approve</button>' +
+            '<button class="btn danger" data-act="kyc-rjct-open" data-id="' + esc(k.id) + '" data-name="' + esc(k.creatorName || '') + '">Reject</button>' +
+          '</div>'
+        : '';
+      return '<div class="card">' +
+        thumb +
+        '<div class="who"><div><div class="nm">' + esc(k.creatorName || 'Unnamed') + '</div>' +
+        '<div class="ph mono">' + esc(k.creatorPhone || '—') + '</div></div></div>' +
+        '<div class="tagrow">' + badge(k.status) + '<span class="tag">' + esc(cap(k.docType) || 'Document') + '</span></div>' +
+        '<dl class="kv">' +
+          '<dt>Creator ID</dt><dd class="mono">' + esc(k.creatorId || '—') + '</dd>' +
+          '<dt>Creator status</dt><dd>' + badge(k.creatorVerificationStatus) + '</dd>' +
+          '<dt>Submitted</dt><dd>' + esc(fmtDateFull(k.submittedAt)) + '</dd>' +
+          (k.reviewedAt ? '<dt>Reviewed</dt><dd>' + esc(fmtDateFull(k.reviewedAt)) + '</dd>' : '') +
+        '</dl>' + note + actions +
+      '</div>';
+    }).join('') + '</div>' +
+    (d.total > s.limit
+      ? '<div style="margin-top:12px"><div class="table-wrap">' + pagerHtml(d.total || 0, d.limit || s.limit, d.offset != null ? d.offset : s.offset) + '</div></div>'
+      : '');
+    // stash docUrls separately so we never re-emit huge data URLs into data attrs beyond what we already have
+    state._kycDocs = {};
+    rows.forEach(k => { state._kycDocs[k.id] = k.docUrl; });
+    setStamp();
+  } catch (e){
+    if (e && e.code === 'auth'){ onApiError(e); return; }
+    if (e && e.code === 'network') wrap.innerHTML = errorPanel('Server unreachable', 'Could not reach the API. If the server was asleep it usually wakes in ~30 seconds.');
+    else wrap.innerHTML = errorPanel('Something went wrong', esc(e.message || 'Unexpected error'));
+  }
+}
+function openKycZoom(id){
+  const url = (state._kycDocs || {})[id];
+  if (!url) return;
+  openModal({ title:'Document preview', html: '<img class="full" src="' + esc(url) + '" alt="Enlarged identity document" />', cancelLabel:'Close' });
+}
+function openKycConfirm(decision, id, name){
+  const isApprove = decision === 'approve';
+  openModal({
+    title: (isApprove ? 'Approve KYC' : 'Reject KYC'),
+    body: 'Are you sure you want to <strong>' + (isApprove ? 'approve' : 'reject') + '</strong> the document submitted by <strong>' + esc(name || 'this creator') + '</strong>?',
+    html: '<label for="kycNote">Note to creator (optional)</label><textarea id="kycNote" placeholder="Shown to the creator…"></textarea>',
+    primary: { label: isApprove ? 'Approve' : 'Reject', kind: isApprove ? 'ok' : 'danger' },
+    onPrimary: () => doKycDecision(decision, id, name),
+  });
+}
+async function doKycDecision(decision, id, name){
+  const btn = $('#modalPrimary');
+  if (btn){ btn.disabled = true; btn.textContent = 'Working…'; }
+  const note = ($('#kycNote') || {}).value ? $('#kycNote').value.trim() : '';
+  try {
+    await api('/api/admin/dashboard/kyc/' + encodeURIComponent(id) + '/decision',
+      { method:'POST', body: Object.assign({ decision }, note ? { note } : {}) });
+    closeModal();
+    toast('KYC ' + (decision === 'approve' ? 'approved' : 'rejected') + ' for ' + (name || 'creator'),
+      decision === 'approve' ? 'ok' : 'bad');
+    loadBadges();
+    updateKyc();
+  } catch (e){
+    closeModal();
+    if (e && e.code === 'auth'){ onApiError(e); } else toast(e.message || 'Decision failed', 'bad');
+  }
+}
+
+/* ---------- PROFILE VIEW (slide-over) ---------- */
+let pfTarget = null; // { kind:'user'|'creator', id }
+function openProfile(kind, id){
+  pfTarget = { kind, id };
+  const w = $('#profileWrap');
+  w.hidden = false;
+  document.body.style.overflow = 'hidden';
+  w.innerHTML =
+    '<div class="pf-scrim" data-act="profile-close"></div>' +
+    '<div class="pf-panel" role="dialog" aria-modal="true" aria-label="' + (kind === 'creator' ? 'Creator' : 'User') + ' profile">' +
+      '<div class="pf-head">' +
+        '<button class="btn ghost sm" data-act="profile-close">&lsaquo; Back</button>' +
+        '<div class="pf-title">Loading…</div>' +
+        '<button class="btn ghost sm" data-act="profile-close" aria-label="Close profile">✕</button>' +
+      '</div>' +
+      '<div class="pf-body">' + loadingPanel('profile') + '</div>' +
+    '</div>';
+  if (kind === 'creator') renderCreatorProfile(id);
+  else renderUserProfile(id);
+}
+function closeProfile(){
+  $('#profileWrap').hidden = true;
+  $('#profileWrap').innerHTML = '';
+  pfTarget = null;
+  document.body.style.overflow = '';
+}
+function pfSetTitle(t){ const el = $('#profileWrap .pf-title'); if (el) el.textContent = t; }
+function pfBody(){ return $('#profileWrap .pf-body'); }
+function pfErrorHtml(e){
+  if (e && e.code === 'network') return errorPanel('Server unreachable', 'Could not reach the API. If the server was asleep it usually wakes in ~30 seconds.').replace('data-act="retry"', 'data-act="profile-retry"');
+  return errorPanel('Something went wrong', esc((e && e.message) || 'Unexpected error')).replace('data-act="retry"', 'data-act="profile-retry"');
+}
+function pfHero(o){
+  return '<div class="pf-hero">' + avatarImg(o.avatarUrl, o.name, true) +
+    '<div class="pf-who"><div class="nm">' + esc(o.name || '—') + '</div>' +
+    (o.sub ? '<div class="rn">' + esc(o.sub) + '</div>' : '') +
+    (o.idline ? '<div class="id">' + o.idline + '</div>' : '') +
+    (o.tags && o.tags.length ? '<div class="pf-tags">' + o.tags.join('') + '</div>' : '') +
+    '</div></div>';
+}
+
+/* ----- USER PROFILE ----- */
+async function renderUserProfile(id){
+  const wrap = pfBody();
+  try {
+    const d = await api('/api/admin/dashboard/users/' + encodeURIComponent(id));
+    const p = d.profile || {};
+    pfSetTitle((p.displayName || p.name || 'User') + ' · User');
+    let html = pfHero({
+      avatarUrl: p.avatarUrl,
+      name: p.name || '—',
+      sub: (p.displayName && p.displayName !== p.name) ? ('Display name: ' + p.displayName) : null,
+      idline: '<span class="mono">' + esc(p.phone || '—') + '</span>' + (p.memberId ? ' · <span class="mono">' + esc(p.memberId) + '</span>' : ''),
+      tags: [badge(p.status)],
+    });
+    html += '<div class="pf-grid">' +
+      pfStat('Wallet balance', esc(inr(p.walletBalancePaise))) +
+      pfStat('Total calls', esc(numFmt(p.totalCalls))) +
+      pfStat('Total spent', esc(inr(p.totalSpentPaise))) +
+      pfStat('Joined', esc(fmtDateFull(p.joinedAt))) +
+      '</div>';
+
+    const calls = d.calls || [];
+    html += '<div class="pf-sec"><h3>Call history</h3>';
+    if (!calls.length){
+      html += emptyPanel('No calls', 'This user has not placed any calls yet.');
+    } else {
+      html += '<div class="table-wrap"><table><thead><tr>' +
+        '<th>Date</th><th>Creator</th><th>Type</th><th>Status</th>' +
+        '<th class="num">Duration</th><th class="num">Cost ₹</th>' +
+        '</tr></thead><tbody>' +
+        calls.map(c =>
+          '<tr>' +
+          '<td data-label="Date">' + esc(fmtDate(c.createdAt)) + '</td>' +
+          '<td data-label="Creator">' + esc(c.creatorName || '—') + '</td>' +
+          '<td data-label="Type">' + esc(cap(c.type)) + '</td>' +
+          '<td data-label="Status">' + badge(c.status) + '</td>' +
+          '<td class="num" data-label="Duration"><span class="mono">' + esc(fmtDur(c.durationSec)) + '</span></td>' +
+          '<td class="num" data-label="Cost ₹">' + esc(inr(c.costPaise)) + '</td>' +
+          '</tr>'
+        ).join('') + '</tbody></table></div>';
+    }
+    html += '</div>';
+
+    const tx = d.transactions || [];
+    html += '<div class="pf-sec"><h3>Transactions</h3>';
+    if (!tx.length){
+      html += emptyPanel('No transactions', 'No wallet transactions recorded yet.');
+    } else {
+      html += '<div class="table-wrap"><table><thead><tr>' +
+        '<th>Date</th><th>Type</th><th class="num">Amount ₹</th><th>Description</th><th class="num">Balance after</th>' +
+        '</tr></thead><tbody>' +
+        tx.map(t => {
+          const a = Number(t.amountPaise) || 0;
+          const cls = a > 0 ? 'pos' : (a < 0 ? 'neg' : '');
+          return '<tr>' +
+          '<td data-label="Date">' + esc(fmtDate(t.createdAt)) + '</td>' +
+          '<td data-label="Type">' + badge(t.type) + '</td>' +
+          '<td class="num ' + cls + '" data-label="Amount ₹"><span class="mono">' + esc(signedInr(a)) + '</span>' +
+          (Number(t.bonusPaise) ? '<br><span class="muted" style="font-size:.75rem">bonus ' + esc(inr(t.bonusPaise)) + '</span>' : '') +
+          '</td>' +
+          '<td data-label="Description">' + esc(t.description || '—') + '</td>' +
+          '<td class="num" data-label="Balance after">' + esc(inr(t.balanceAfterPaise)) + '</td>' +
+          '</tr>';
+        }).join('') + '</tbody></table></div>';
+    }
+    html += '</div>';
+
+    wrap.innerHTML = html;
+    wrap.scrollTop = 0;
+  } catch (e){
+    if (e && e.code === 'auth'){ closeProfile(); onApiError(e); return; }
+    wrap.innerHTML = pfErrorHtml(e);
+  }
+}
+
+/* ----- CREATOR PROFILE ----- */
+async function renderCreatorProfile(id){
+  const wrap = pfBody();
+  try {
+    const d = await api('/api/admin/dashboard/creators/' + encodeURIComponent(id));
+    const p = d.profile || {};
+    pfSetTitle((p.displayName || p.realName || 'Creator') + ' · Creator');
+    const r = Number(p.rating);
+    const rating = isFinite(r) ? r.toFixed(1) + (p.ratingCount ? ' · ' + numFmt(p.ratingCount) + ' ratings' : '') : '—';
+    let html = pfHero({
+      avatarUrl: p.avatarUrl,
+      name: p.displayName || '—',
+      sub: (p.realName && p.realName !== p.displayName) ? ('Real name: ' + p.realName) : null,
+      idline: '<span class="mono">' + esc(p.phone || '—') + '</span>' + (p.memberId ? ' · <span class="mono">' + esc(p.memberId) + '</span>' : ''),
+      tags: [badge(p.verificationStatus), badge(p.kycStatus), onlineBadge(!!p.isOnline),
+             onOffBadge(!!p.videoCallEnabled, 'Video'), onOffBadge(!!p.audioCallEnabled, 'Audio')],
+    });
+    html += '<div class="pf-grid">' +
+      pfStat('Rate /min', esc(inr(p.ratePaisePerMin))) +
+      pfStat('Rating', esc(rating)) +
+      pfStat('Earnings balance', esc(inr(p.earningsBalancePaise))) +
+      pfStat('Lifetime earnings', esc(inr(p.lifetimeEarningsPaise))) +
+      pfStat('Total calls', esc(numFmt(p.totalCalls))) +
+      pfStat('Total minutes', esc(numFmt(p.totalMinutes))) +
+      pfStat('Joined', esc(fmtDateFull(p.joinedAt))) +
+      '</div>';
+
+    html += '<div class="pf-sec"><h3>Details</h3><div class="card"><dl class="kv">' +
+      (p.bio ? '<dt>Bio</dt><dd>' + esc(p.bio) + '</dd>' : '') +
+      (p.talksAbout ? '<dt>Talks about</dt><dd>' + esc(p.talksAbout) + '</dd>' : '') +
+      (p.hobbies ? '<dt>Hobbies</dt><dd>' + esc(p.hobbies) + '</dd>' : '') +
+      '<dt>Languages</dt><dd>' + tagRow(tagList(p.languages)) + '</dd>' +
+      '<dt>Call types</dt><dd>' + tagRow(tagList(p.allowedCallTypes)) + '</dd>' +
+      '<dt>Random match</dt><dd>' + (p.randomMatchEnabled ? '<span class="badge ok"><span class="dot"></span>Enabled</span>' : '<span class="muted">Off</span>') + '</dd>' +
+      (p.introVideoUrl ? '<dt>Intro video</dt><dd><a class="plink" href="' + esc(p.introVideoUrl) + '" target="_blank" rel="noopener">Open video ↗</a></dd>' : '') +
+    '</dl></div></div>';
+
+    const bd = p.bankDetails;
+    html += '<div class="pf-sec"><h3>Payout / bank details</h3><div class="card"><dl class="kv">';
+    if (bd){
+      html += '<dt>Account holder</dt><dd>' + esc(bd.accountHolder || '—') + '</dd>' +
+        '<dt>Account number</dt><dd><span class="mono">' + esc(bd.accountNumber || '—') + '</span></dd>' +
+        '<dt>IFSC</dt><dd><span class="mono">' + esc(bd.ifsc || '—') + '</span></dd>' +
+        '<dt>UPI ID</dt><dd><span class="mono">' + esc(bd.upiId || '—') + '</span></dd>';
+    } else {
+      html += '<dt>Details</dt><dd class="muted">Not provided yet</dd>';
+    }
+    html += '</dl></div></div>';
+
+    const mu = jsonArr(p.mediaUrls);
+    if (mu.length){
+      state._pfMedia = mu;
+      html += '<div class="pf-sec"><h3>Media</h3><div class="media-grid">' +
+        mu.map((u, i) =>
+          '<img src="' + esc(u) + '" alt="Profile media photo" loading="lazy" data-act="pmedia-zoom" data-idx="' + i + '" onerror="this.remove()" />'
+        ).join('') + '</div></div>';
+    }
+
+    const kyc = d.kyc || [];
+    html += '<div class="pf-sec"><h3>KYC documents</h3>';
+    if (!kyc.length){
+      html += emptyPanel('No KYC documents', 'No documents submitted yet.');
+    } else {
+      state._pfDocs = {};
+      html += '<div class="kyc-grid">' + kyc.map(k => {
+        state._pfDocs[k.id] = k.docUrl;
+        const thumb = k.docUrl
+          ? '<img class="doc-thumb" src="' + esc(k.docUrl) + '" alt="KYC document" loading="lazy" data-act="pkyc-zoom" data-id="' + esc(k.id) + '" onerror="this.outerHTML=\'<span class=&quot;doc-thumb missing&quot;&gt;Document image could not be loaded</span>\'" />'
+          : '<span class="doc-thumb missing">No document image</span>';
+        return '<div class="kyc-doc">' + thumb +
+          '<div class="rowline"><span class="dtt">' + esc(cap(k.docType) || 'Document') + '</span>' + badge(k.status) + '</div>' +
+          '<div class="meta">Submitted ' + esc(fmtDateFull(k.submittedAt)) +
+          (k.reviewedAt ? ' · Reviewed ' + esc(fmtDateFull(k.reviewedAt)) : '') + '</div>' +
+          (k.reviewerNote ? '<div class="meta">Note: ' + esc(k.reviewerNote) + '</div>' : '') +
+          '</div>';
+      }).join('') + '</div>';
+    }
+    html += '</div>';
+
+    const wd = d.withdrawals || [];
+    html += '<div class="pf-sec"><h3>Withdrawals</h3>';
+    if (!wd.length){
+      html += emptyPanel('No withdrawals', 'No withdrawal requests yet.');
+    } else {
+      html += '<div class="table-wrap"><table><thead><tr>' +
+        '<th>Date</th><th class="num">Amount ₹</th><th>Destination</th><th>Status</th>' +
+        '</tr></thead><tbody>' +
+        wd.map(w =>
+          '<tr>' +
+          '<td data-label="Date">' + esc(fmtDate(w.createdAt)) + '</td>' +
+          '<td class="num" data-label="Amount ₹">' + esc(inr(w.amountPaise)) + '</td>' +
+          '<td data-label="Destination"><span class="mono">' + esc(w.destination || '—') + '</span></td>' +
+          '<td data-label="Status">' + badge(w.status) +
+          (w.processedAt ? ' <span class="muted" style="font-size:.76rem">' + esc(fmtDate(w.processedAt)) + '</span>' : '') + '</td>' +
+          '</tr>'
+        ).join('') + '</tbody></table></div>';
+    }
+    html += '</div>';
+
+    const calls = d.calls || [];
+    html += '<div class="pf-sec"><h3>Call history</h3>';
+    if (!calls.length){
+      html += emptyPanel('No calls', 'This creator has not taken any calls yet.');
+    } else {
+      html += '<div class="table-wrap"><table><thead><tr>' +
+        '<th>Date</th><th>User</th><th>Type</th><th>Status</th>' +
+        '<th class="num">Duration</th><th class="num">Cost ₹</th>' +
+        '</tr></thead><tbody>' +
+        calls.map(c =>
+          '<tr>' +
+          '<td data-label="Date">' + esc(fmtDate(c.createdAt)) + '</td>' +
+          '<td data-label="User">' + esc(c.userName || '—') + '</td>' +
+          '<td data-label="Type">' + esc(cap(c.type)) + '</td>' +
+          '<td data-label="Status">' + badge(c.status) + '</td>' +
+          '<td class="num" data-label="Duration"><span class="mono">' + esc(fmtDur(c.durationSec)) + '</span></td>' +
+          '<td class="num" data-label="Cost ₹">' + esc(inr(c.costPaise)) +
+          (c.ratePaisePerMin != null ? '<br><span class="muted" style="font-size:.75rem">' + esc(inr(c.ratePaisePerMin)) + '/min</span>' : '') +
+          '</td>' +
+          '</tr>'
+        ).join('') + '</tbody></table></div>';
+    }
+    html += '</div>';
+
+    wrap.innerHTML = html;
+    wrap.scrollTop = 0;
+  } catch (e){
+    if (e && e.code === 'auth'){ closeProfile(); onApiError(e); return; }
+    wrap.innerHTML = pfErrorHtml(e);
+  }
+}
+function openPfKycZoom(id){
+  const url = (state._pfDocs || {})[id];
+  if (url) openModal({ title:'Document preview', html:'<img class="full" src="' + esc(url) + '" alt="Enlarged KYC document" />', cancelLabel:'Close' });
+}
+function openPfMediaZoom(idx){
+  const url = ((state._pfMedia || [])[Number(idx)]);
+  if (url) openModal({ title:'Media', html:'<img class="full" src="' + esc(url) + '" alt="Enlarged profile media" />', cancelLabel:'Close' });
+}
+
+/* ---------- REPORTS ---------- */
+async function loadReports(){
+  const s = state.reports;
+  content.innerHTML = tabHead('Reports',
+      '<div class="controls"><div class="seg-top"><span class="seg-label">Range</span>' +
+      segRangeHtml('rep-range', s.range, REP_RANGES) + '</div></div>') +
+    '<div id="dataWrap">' + loadingPanel('reports') + '</div>';
+  updateReports();
+}
+async function updateReports(){
+  const s = state.reports;
+  const wrap = $('#dataWrap');
+  if (!wrap) return;
+  wrap.innerHTML = loadingPanel('reports');
+  try {
+    const d = await api('/api/admin/dashboard/reports/overview', { params: { range: s.range } });
+    state._reportsD = d;
+    const t = d.totals || {};
+    const cards = [
+      ['Calls', esc(numFmt(t.calls)), ''],
+      ['Revenue', esc(inr(t.revenuePaise)), 'accent'],
+      ['Minutes', esc(numFmt(t.minutes)), ''],
+      ['New users', esc(numFmt(t.newUsers)), ''],
+      ['New creators', esc(numFmt(t.newCreators)), ''],
+    ];
+    const buckets = d.buckets || [];
+    let html = '<div class="stats">' + cards.map(c =>
+      '<div class="stat ' + c[2] + '"><div class="k">' + c[0] + '</div><div class="v">' + c[1] + '</div></div>'
+    ).join('') + '</div>';
+
+    html += '<div class="subhead"><h3>Trends · ' + esc(cap(RANGE_LABEL[s.range] || '')) + '</h3>' +
+      '<button class="btn ghost sm" data-act="csv-buckets">Download CSV</button></div>';
+    if (buckets.length){
+      html += '<div class="chart-grid">' +
+        '<div class="chart-card"><h4>Revenue over time</h4>' + svgBarChart(buckets, d.bucket, b => Number(b.revenuePaise) || 0, inrCompact) + '</div>' +
+        '<div class="chart-card"><h4>Calls over time</h4>' + svgLineChart(buckets, d.bucket, b => Number(b.calls) || 0, numFmt) + '</div>' +
+      '</div>';
+    } else {
+      html += emptyPanel('No trend data', 'There is no time-series data for this range yet.');
+    }
+
+    const sb = d.statusBreakdown || [];
+    html += '<div class="subhead"><h3>Call status breakdown</h3></div>';
+    if (sb.length){
+      const mx = Math.max.apply(null, sb.map(x => Number(x.count) || 0).concat([1]));
+      html += '<div class="chart-card">' + sb.map(x => {
+        const cnt = Number(x.count) || 0;
+        return '<div class="break-row"><span class="break-label">' + badge(x.status) + '</span>' +
+          '<div class="break-bar"><i style="width:' + Math.max(2, Math.round(cnt / mx * 100)) + '%"></i></div>' +
+          '<span class="break-num">' + esc(numFmt(cnt)) + '</span></div>';
+      }).join('') + '</div>';
+    } else {
+      html += emptyPanel('No calls', 'No call status data for this range.');
+    }
+
+    const tc = d.topCreators || [];
+    html += '<div class="subhead"><h3>Top creators</h3>' +
+      '<button class="btn ghost sm" data-act="csv-creators"' + (tc.length ? '' : ' disabled') + '>Download CSV</button></div>';
+    if (!tc.length){
+      html += emptyPanel('No creators', 'No creator activity in this range.');
+    } else {
+      html += '<div class="table-wrap"><table><thead><tr>' +
+        '<th>#</th><th>Name</th><th class="num">Calls</th><th class="num">Minutes</th><th class="num">Revenue ₹</th>' +
+        '</tr></thead><tbody>' +
+        tc.map((x, i) =>
+          '<tr><td data-label="#">' + (i + 1) + '</td>' +
+          '<td data-label="Name">' + idLink('creator', x.id, esc(x.name || '—')) + '</td>' +
+          '<td class="num" data-label="Calls">' + esc(numFmt(x.calls)) + '</td>' +
+          '<td class="num" data-label="Minutes">' + esc(numFmt(x.minutes)) + '</td>' +
+          '<td class="num" data-label="Revenue ₹">' + esc(inr(x.revenuePaise)) + '</td></tr>'
+        ).join('') + '</tbody></table></div>';
+    }
+
+    const ts = d.topSpenders || [];
+    html += '<div class="subhead"><h3>Top spenders</h3>' +
+      '<button class="btn ghost sm" data-act="csv-spenders"' + (ts.length ? '' : ' disabled') + '>Download CSV</button></div>';
+    if (!ts.length){
+      html += emptyPanel('No spenders', 'No spending activity in this range.');
+    } else {
+      html += '<div class="table-wrap"><table><thead><tr>' +
+        '<th>#</th><th>Name</th><th>Phone</th><th class="num">Calls</th><th class="num">Spent ₹</th>' +
+        '</tr></thead><tbody>' +
+        ts.map((x, i) =>
+          '<tr><td data-label="#">' + (i + 1) + '</td>' +
+          '<td data-label="Name">' + idLink('user', x.id, esc(x.name || '—')) + '</td>' +
+          '<td data-label="Phone">' + idLink('user', x.id, '<span class="mono">' + esc(x.phone || '—') + '</span>') + '</td>' +
+          '<td class="num" data-label="Calls">' + esc(numFmt(x.calls)) + '</td>' +
+          '<td class="num" data-label="Spent ₹">' + esc(inr(x.spentPaise)) + '</td></tr>'
+        ).join('') + '</tbody></table></div>';
+    }
+
+    wrap.innerHTML = html;
+    setStamp();
+  } catch (e){
+    if (e && e.code === 'auth'){ onApiError(e); return; }
+    if (e && e.code === 'network') wrap.innerHTML = errorPanel('Server unreachable', 'Could not reach the API. If the server was asleep it usually wakes in ~30 seconds.');
+    else wrap.innerHTML = errorPanel('Something went wrong', esc(e.message || 'Unexpected error'));
+  }
+}
+
+/* ---------- hand-rolled SVG charts (no chart library) ---------- */
+function bucketLabel(t, bucket){
+  if (!t) return '';
+  const d = new Date(t);
+  if (isNaN(d)) return '';
+  if (bucket === 'hour') return d.toLocaleString('en-GB', { timeZone: TZ, day:'numeric', month:'short', hour:'2-digit', minute:'2-digit', hour12:false });
+  if (bucket === 'month') return d.toLocaleString('en-GB', { timeZone: TZ, month:'short', year:'2-digit' });
+  return d.toLocaleString('en-GB', { timeZone: TZ, day:'numeric', month:'short' });
+}
+function niceCeil(max){
+  if (!(max > 0)) return 1;
+  const raw = max / 4, mag = Math.pow(10, Math.floor(Math.log10(raw)));
+  const steps = [1, 2, 2.5, 5, 10];
+  for (const s of steps){ if (raw <= s * mag) return s * mag * 4; }
+  return 10 * mag * 4;
+}
+function svgFrameAxes(n, ceil, fmtY, bucket, tAt){
+  const W = 640, H = 252, padL = 52, padR = 10, padT = 12, padB = 36;
+  const pw = W - padL - padR, ph = H - padT - padB, step = pw / n;
+  let body = '';
+  for (let g = 0; g <= 4; g++){
+    const v = ceil * g / 4, y = padT + ph - (ph * g / 4);
+    body += '<line class="gridln" x1="' + padL + '" y1="' + y.toFixed(1) + '" x2="' + (padL + pw) + '" y2="' + y.toFixed(1) + '"/>';
+    body += '<text class="ax-r" x="' + (padL - 8) + '" y="' + (y + 4).toFixed(1) + '">' + esc(fmtY(v)) + '</text>';
+  }
+  const stride = Math.max(1, Math.ceil(n / 6));
+  for (let i = 0; i < n; i += stride){
+    const x = padL + step * (i + 0.5);
+    body += '<text class="ax-t" x="' + x.toFixed(1) + '" y="' + (padT + ph + 20) + '">' + esc(bucketLabel(tAt(i), bucket)) + '</text>';
+  }
+  return { W, H, padL, padT, ph, step, body };
+}
+function svgBarChart(buckets, bucket, get, fmt){
+  const n = buckets.length;
+  const vals = buckets.map(get);
+  const ceil = niceCeil(Math.max.apply(null, vals.concat([0])));
+  const f = svgFrameAxes(n, ceil, fmt, bucket, i => buckets[i].t);
+  let body = f.body;
+  for (let i = 0; i < n; i++){
+    const h = Math.max(0, (vals[i] / ceil) * f.ph);
+    const bw = Math.max(2, f.step * 0.62);
+    const x = f.padL + f.step * (i + 0.5) - bw / 2;
+    const y = f.padT + f.ph - h;
+    body += '<rect class="bar" x="' + x.toFixed(1) + '" y="' + y.toFixed(1) + '" width="' + bw.toFixed(1) + '" height="' + Math.max(h, h > 0 ? 1 : 0).toFixed(1) + '" rx="3">' +
+      '<title>' + esc(bucketLabel(buckets[i].t, bucket) + ' · ' + fmt(vals[i])) + '</title></rect>';
+  }
+  return '<svg class="chart-svg" viewBox="0 0 ' + f.W + ' ' + f.H + '" role="img" aria-label="Revenue bar chart">' + body + '</svg>';
+}
+function svgLineChart(buckets, bucket, get, fmt){
+  const n = buckets.length;
+  const vals = buckets.map(get);
+  const ceil = niceCeil(Math.max.apply(null, vals.concat([0])));
+  const f = svgFrameAxes(n, ceil, fmt, bucket, i => buckets[i].t);
+  const pts = vals.map((v, i) => ({
+    x: f.padL + f.step * (i + 0.5),
+    y: f.padT + f.ph - (v / ceil) * f.ph,
+  }));
+  const tip = i => '<title>' + esc(bucketLabel(buckets[i].t, bucket) + ' · ' + fmt(vals[i])) + '</title>';
+  let body = f.body;
+  if (n === 1){
+    body += '<circle class="linedot" cx="' + pts[0].x.toFixed(1) + '" cy="' + pts[0].y.toFixed(1) + '" r="5">' + tip(0) + '</circle>';
+  } else if (n > 1){
+    const base = (f.padT + f.ph).toFixed(1);
+    const line = pts.map((p, i) => (i ? 'L' : 'M') + p.x.toFixed(1) + ' ' + p.y.toFixed(1)).join(' ');
+    body += '<path class="areaf" d="' + line + ' L' + pts[n - 1].x.toFixed(1) + ' ' + base + ' L' + pts[0].x.toFixed(1) + ' ' + base + ' Z"/>';
+    body += '<path class="linep" d="' + line + '"/>';
+    body += pts.map((p, i) =>
+      '<circle class="linedot" cx="' + p.x.toFixed(1) + '" cy="' + p.y.toFixed(1) + '" r="3.5">' + tip(i) + '</circle>'
+    ).join('');
+  }
+  return '<svg class="chart-svg" viewBox="0 0 ' + f.W + ' ' + f.H + '" role="img" aria-label="Calls line chart">' + body + '</svg>';
+}
+
+/* ---------- CSV exports ---------- */
+function csvVal(v){
+  v = String(v == null ? '' : v);
+  return /[",\n\r]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v;
+}
+function downloadCSV(name, header, rows){
+  const out = [header].concat(rows).map(r => r.map(csvVal).join(',')).join('\r\n');
+  const blob = new Blob(['﻿' + out], { type: 'text/csv;charset=utf-8' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = name;
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(function(){ try { URL.revokeObjectURL(a.href); } catch (e){} a.remove(); }, 600);
+}
+function csvBuckets(){
+  const d = state._reportsD;
+  if (!d) return;
+  const rows = (d.buckets || []).map(b => [
+    b.t, bucketLabel(b.t, d.bucket), b.calls,
+    ((Number(b.revenuePaise) || 0) / 100).toFixed(2), b.minutes, b.newUsers, b.newCreators,
+  ]);
+  downloadCSV('minutemate-report-buckets-' + d.range + '.csv',
+    ['time_utc', 'label', 'calls', 'revenue_inr', 'minutes', 'new_users', 'new_creators'], rows);
+}
+function csvCreators(){
+  const d = state._reportsD;
+  if (!d) return;
+  const rows = (d.topCreators || []).map(x => [
+    x.id, x.name, x.calls, x.minutes, ((Number(x.revenuePaise) || 0) / 100).toFixed(2),
+  ]);
+  downloadCSV('minutemate-report-top-creators-' + d.range + '.csv',
+    ['id', 'name', 'calls', 'minutes', 'revenue_inr'], rows);
+}
+function csvSpenders(){
+  const d = state._reportsD;
+  if (!d) return;
+  const rows = (d.topSpenders || []).map(x => [
+    x.id, x.name, x.phone, x.calls, ((Number(x.spentPaise) || 0) / 100).toFixed(2),
+  ]);
+  downloadCSV('minutemate-report-top-spenders-' + d.range + '.csv',
+    ['id', 'name', 'phone', 'calls', 'spent_inr'], rows);
+}
+
+/* ---------- global click delegation ---------- */
+document.addEventListener('click', e => {
+  const el = e.target.closest('[data-act]');
+  if (!el) return;
+  const act = el.dataset.act;
+
+  if (act === 'logout'){ doLogout(false); return; }
+  if (act === 'refresh'){ reloadCurrent(); return; }
+  if (act === 'goto-calls'){ gotoTab('calls'); return; }
+  if (act === 'retry'){ reloadCurrent(); return; }
+  if (act === 'prev' || act === 'next'){
+    const st = state[currentTab];
+    if (st && typeof st.offset === 'number'){
+      st.offset = Math.max(0, st.offset + (act === 'next' ? st.limit : -st.limit));
+      if (currentTab === 'users') updateUsers();
+      else if (currentTab === 'creators') updateCreators();
+      else if (currentTab === 'calls') updateCalls();
+      else if (currentTab === 'kyc') updateKyc();
+      $('#content').scrollIntoView({ block:'start' });
+    }
+    return;
+  }
+  if (act === 'modal-close'){ closeModal(); return; }
+  if (act === 'modal-primary'){
+    if (pendingModal && typeof pendingModal.onPrimary === 'function') pendingModal.onPrimary();
+    return;
+  }
+  if (act === 'apprv-open'){ openApprovalConfirm('approve', el.dataset.id, el.dataset.name); return; }
+  if (act === 'rjct-open'){ openApprovalConfirm('reject', el.dataset.id, el.dataset.name); return; }
+  if (act === 'kyc-apprv-open'){ openKycConfirm('approve', el.dataset.id, el.dataset.name); return; }
+  if (act === 'kyc-rjct-open'){ openKycConfirm('reject', el.dataset.id, el.dataset.name); return; }
+  if (act === 'kyc-zoom'){ openKycZoom(el.dataset.id); return; }
+  if (act === 'ov-range'){
+    state.overview.range = el.dataset.range;
+    setSegActive('ov-range', el.dataset.range);
+    updateOverview();
+    return;
+  }
+  if (act === 'rep-range'){
+    state.reports.range = el.dataset.range;
+    setSegActive('rep-range', el.dataset.range);
+    updateReports();
+    return;
+  }
+  if (act === 'profile-user'){ e.preventDefault(); openProfile('user', el.dataset.id); return; }
+  if (act === 'profile-creator'){ e.preventDefault(); openProfile('creator', el.dataset.id); return; }
+  if (act === 'profile-close'){ closeProfile(); return; }
+  if (act === 'profile-retry'){ if (pfTarget) openProfile(pfTarget.kind, pfTarget.id); return; }
+  if (act === 'pkyc-zoom'){ openPfKycZoom(el.dataset.id); return; }
+  if (act === 'pmedia-zoom'){ openPfMediaZoom(el.dataset.idx); return; }
+  if (act === 'csv-buckets'){ csvBuckets(); return; }
+  if (act === 'csv-creators'){ csvCreators(); return; }
+  if (act === 'csv-spenders'){ csvSpenders(); return; }
+});
+$('#tabs').addEventListener('click', e => {
+  const b = e.target.closest('[data-tab]');
+  if (b) gotoTab(b.dataset.tab);
+});
+
+/* initial paint: login */
+showLogin(null);
+</script>
+</body>
+</html>
