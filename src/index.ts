@@ -10,9 +10,13 @@ import "dotenv/config";
 import express from "express";
 import cors from "cors";
 import helmet from "helmet";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { registerRoutes } from "./routes.js";
 import { registerCreatorRoutes } from "./creator.js";
 import { runStartupMigration } from "./migrate.js";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const app = express();
 const PORT = Number(process.env.PORT) || 3000;
@@ -51,6 +55,28 @@ app.use(express.json({ limit: "8mb" }));
 
 registerRoutes(app);
 registerCreatorRoutes(app);
+
+// 2026-10-02: self-hosted admin dashboard — the same dashboard page, served
+// from this backend so it stays up independent of Muse hosting/credits.
+// Secret-gated login inside the page; no secret is embedded.
+app.get(
+  "/admin",
+  helmet({
+    contentSecurityPolicy: {
+      directives: {
+        // The dashboard is one self-contained file with inline script/style.
+        "script-src": ["'self'", "'unsafe-inline'"],
+        "style-src": ["'self'", "'unsafe-inline'"],
+        "connect-src": ["'self'", "https:"],
+        "img-src": ["'self'", "data:", "https:"],
+      },
+    },
+    crossOriginEmbedderPolicy: false,
+  }),
+  (_req, res) => {
+    res.sendFile(path.join(__dirname, "..", "public", "admin.html"));
+  },
+);
 
 // 404 for unknown API routes — keeps clients from misreading HTML error pages.
 app.use("/api", (_req, res) => {
