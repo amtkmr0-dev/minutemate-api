@@ -1414,13 +1414,14 @@ export function registerCreatorRoutes(app: Express): void {
     try {
       const cutoff = new Date(Date.now() - 30 * 60 * 1000).toISOString();
       const rows = (await sql(
-        `SELECT id, last_heartbeat_at FROM call_sessions
-         WHERE status = 'active' AND last_heartbeat_at < $1`,
+        `SELECT id, last_heartbeat_at, started_at FROM call_sessions
+         WHERE status = 'active'
+           AND (last_heartbeat_at IS NULL OR last_heartbeat_at < $1)`,
         [cutoff],
       )) as Array<Record<string, unknown>>;
       for (const r of rows) {
         try {
-          const lastBeatRaw = r.last_heartbeat_at as string | null;
+          const lastBeatRaw = (r.last_heartbeat_at ?? r.started_at) as string | null;
           const lastBeat = lastBeatRaw ? new Date(lastBeatRaw) : new Date(Date.now() - 30 * 60 * 1000);
           await settleCall(String(r.id), {
             effectiveEnd: new Date(lastBeat.getTime() + 60_000),
