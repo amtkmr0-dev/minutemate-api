@@ -236,6 +236,103 @@ async function isPaymentProcessed(paymentId: string): Promise<boolean> {
 }
 
 /**
+ * Atomic idempotency claim (2026-10-02). The `processed_payments` primary key
+ * makes the INSERT itself the synchronization point: exactly one concurrent
+ * claimant wins, the rest see a conflict. This closes the check-then-act race
+ * where two simultaneous /verify calls could both pass `isPaymentProcessed`
+ * and double-credit the wallet.
+ *
+ * Returns true when THIS call won the claim (and must therefore credit, or
+ * compensate by deleting the claim if crediting throws). Returns false when
+ * another call already claimed it (idempotent duplicate path).
+ */
+async function claimProcessedPayment(args: {
+  paymentId: string;
+  userId: string;
+  orderId: string;
+  amountPaise: number;
+}): Promise<boolean> {
+  const inserted = await db
+    .insert(processedPayments)
+    .values({
+      providerPaymentId: args.paymentId,
+      userId: args.userId,
+      orderId: args.orderId,
+      amountPaise: args.amountPaise,
+    })
+    .onConflictDoNothing()
+    .returning({ id: processedPayments.providerPaymentId });
+  return inserted.length > 0;
+}
+
+/** Remove a claim we won but could not credit (lets a later retry proceed). */
+async function releaseProcessedPaymentClaim(paymentId: string): Promise<void> {
+  await db.delete(processedPayments).where(eq(processedPayments.providerPaymentId, paymentId));
+}
+
+/**
+ * The single credit path used by BOTH /verify and the Razorpay webhook.
+ * Caller must have won `claimProcessedPayment` first. Exactly-once holds
+ * because only the claim winner reaches here.
+ */
+async function creditRechargeInternal(args: {
+  userId: string;
+  orderId: string;
+  paymentId: string;
+  packId: string;
+  amountPaise: number;
+  simulated: boolean;
+}): Promise<VerifyResult> {
+  const bonusPaise = calculateBonusPaise(args.amountPaise);
+  const totalPaise = args.amountPaise + bonusPaise;
+
+  const wallet = await getOrCreateWallet(args.userId);
+  const newBalancePaise = wallet.balancePaise + totalPaise;
+  await db
+    .update(wallets)
+    .set({ balancePaise: newBalancePaise, updatedAt: new Date() })
+    .where(eq(wallets.userId, args.userId));
+
+  const transactionId = randomUUID();
+  await db.insert(transactions).values({
+    id: transactionId,
+    userId: args.userId,
+    type: "recharge",
+    amountPaise: totalPaise,
+    bonusPaise,
+    balanceAfterPaise: newBalancePaise,
+    providerPaymentId: args.paymentId,
+    providerOrderId: args.orderId,
+    description: `Wallet recharge${args.simulated ? " (simulated)" : ""} ${args.packId.replace("pack_", "₹")}${bonusPaise > 0 ? ` (+₹${bonusPaise / 100} bonus)` : ""}`,
+  });
+
+  // Consume the pending order so it cannot be verified again.
+  await db.delete(pendingOrders).where(eq(pendingOrders.orderId, args.orderId));
+
+  return {
+    success: true,
+    duplicate: false,
+    balance: newBalancePaise / 100,
+    amount: args.amountPaise / 100,
+    bonus: bonusPaise / 100,
+    total: totalPaise / 100,
+    transactionId,
+  };
+}
+
+/** Load our pending order; `ignoreExpiry` is for webhooks (Razorpay itself confirms payment). */
+async function loadPendingOrder(orderId: string, ignoreExpiry: boolean) {
+  const conds = [eq(pendingOrders.orderId, orderId)];
+  if (!ignoreExpiry) conds.push(gt(pendingOrders.expiresAt, new Date()));
+  const rows = await db
+    .select()
+    .from(pendingOrders)
+    .where(and(...conds))
+    .limit(1);
+  return rows[0] ?? null;
+}
+
+/**
  * Verify a Razorpay payment and credit the wallet EXACTLY ONCE.
  *
  * Guarantees:
@@ -263,8 +360,28 @@ export async function verifyAndCreditPayment(args: {
     throw Object.assign(new Error("Payment signature verification failed"), { statusCode: 400 });
   }
 
-  // 2. Idempotency — already processed?
-  if (await isPaymentProcessed(razorpayPaymentId)) {
+  // 2. Atomic idempotency claim — exactly one concurrent claimant wins.
+  //    (2026-10-02: replaces the racy check-then-act on isPaymentProcessed.)
+  const pendingEarly = await loadPendingOrder(razorpayOrderId, false);
+  if (!pendingEarly) {
+    throw Object.assign(new Error("Unknown or expired order"), { statusCode: 400 });
+  }
+  if (pendingEarly.userId !== authenticatedUserId) {
+    throw Object.assign(new Error("Order does not belong to this user"), { statusCode: 403 });
+  }
+  const amountPaise = Number(pendingEarly.amountPaise);
+  const bonusPaise = calculateBonusPaise(amountPaise);
+  const totalPaise = amountPaise + bonusPaise;
+
+  const wonClaim = await claimProcessedPayment({
+    paymentId: razorpayPaymentId,
+    userId: pendingEarly.userId,
+    orderId: razorpayOrderId,
+    amountPaise: totalPaise,
+  });
+  if (!wonClaim) {
+    // Another request (verify retry or the webhook) already claimed and is
+    // crediting / has credited this payment — idempotent duplicate path.
     const wallet = await getOrCreateWallet(authenticatedUserId);
     return {
       success: true,
@@ -277,63 +394,22 @@ export async function verifyAndCreditPayment(args: {
     };
   }
 
-  // 3. Source of truth: OUR pending order.
-  const pendingRows = await db
-    .select()
-    .from(pendingOrders)
-    .where(
-      and(eq(pendingOrders.orderId, razorpayOrderId), gt(pendingOrders.expiresAt, new Date())),
-    )
-    .limit(1);
-  const pending = pendingRows[0];
-  if (!pending) {
-    throw Object.assign(new Error("Unknown or expired order"), { statusCode: 400 });
+  // 3. Credit principal + bonus exactly once (we won the claim).
+  try {
+    return await creditRechargeInternal({
+      userId: pendingEarly.userId,
+      orderId: razorpayOrderId,
+      paymentId: razorpayPaymentId,
+      packId: pendingEarly.packId,
+      amountPaise,
+      simulated: false,
+    });
+  } catch (err) {
+    // Compensate: release the claim so a later retry can proceed instead of
+    // seeing a phantom "duplicate" with no credit behind it.
+    await releaseProcessedPaymentClaim(razorpayPaymentId);
+    throw err;
   }
-  if (pending.userId !== authenticatedUserId) {
-    throw Object.assign(new Error("Order does not belong to this user"), { statusCode: 403 });
-  }
-
-  // 4. Credit principal + bonus exactly once.
-  const amountPaise = Number(pending.amountPaise);
-  const bonusPaise = calculateBonusPaise(amountPaise);
-  const totalPaise = amountPaise + bonusPaise;
-
-  const wallet = await getOrCreateWallet(pending.userId);
-  const newBalancePaise = wallet.balancePaise + totalPaise;
-  await db.update(wallets).set({ balancePaise: newBalancePaise, updatedAt: new Date() }).where(eq(wallets.userId, pending.userId));
-
-  const transactionId = randomUUID();
-  await db.insert(transactions).values({
-    id: transactionId,
-    userId: pending.userId,
-    type: "recharge",
-    amountPaise: totalPaise,
-    bonusPaise,
-    balanceAfterPaise: newBalancePaise,
-    providerPaymentId: razorpayPaymentId,
-    providerOrderId: razorpayOrderId,
-    description: `Wallet recharge ${pending.packId.replace("pack_", "₹")}${bonusPaise > 0 ? ` (+₹${bonusPaise / 100} bonus)` : ""}`,
-  });
-
-  await db.insert(processedPayments).values({
-    providerPaymentId: razorpayPaymentId,
-    userId: pending.userId,
-    orderId: razorpayOrderId,
-    amountPaise: totalPaise,
-  });
-
-  // 5. Consume the pending order so it cannot be verified again.
-  await db.delete(pendingOrders).where(eq(pendingOrders.orderId, razorpayOrderId));
-
-  return {
-    success: true,
-    duplicate: false,
-    balance: newBalancePaise / 100,
-    amount: amountPaise / 100,
-    bonus: bonusPaise / 100,
-    total: totalPaise / 100,
-    transactionId,
-  };
 }
 
 // ---------------------------------------------------------------------------
@@ -359,14 +435,7 @@ export async function simulateSuccessfulPayment(args: {
     throw Object.assign(new Error("Only simulation orders can be simulated"), { statusCode: 400 });
   }
 
-  const pendingRows = await db
-    .select()
-    .from(pendingOrders)
-    .where(
-      and(eq(pendingOrders.orderId, args.orderId), gt(pendingOrders.expiresAt, new Date())),
-    )
-    .limit(1);
-  const pending = pendingRows[0];
+  const pending = await loadPendingOrder(args.orderId, false);
   if (!pending) {
     throw Object.assign(new Error("Unknown or expired order"), { statusCode: 400 });
   }
@@ -374,51 +443,121 @@ export async function simulateSuccessfulPayment(args: {
     throw Object.assign(new Error("Order does not belong to this user"), { statusCode: 403 });
   }
 
-  // Mint a synthetic payment id and run the same idempotent credit path.
+  // Mint a synthetic payment id and run the same atomic idempotent credit path.
   const syntheticPaymentId = `SIM_PAY_${randomUUID().replace(/-/g, "").slice(0, 16)}`;
   const amountPaise = Number(pending.amountPaise);
   const bonusPaise = calculateBonusPaise(amountPaise);
   const totalPaise = amountPaise + bonusPaise;
-
-  const wallet = await getOrCreateWallet(pending.userId);
-  const newBalancePaise = wallet.balancePaise + totalPaise;
-  await db.update(wallets).set({ balancePaise: newBalancePaise, updatedAt: new Date() }).where(eq(wallets.userId, pending.userId));
-
-  const transactionId = randomUUID();
-  await db.insert(transactions).values({
-    id: transactionId,
-    userId: pending.userId,
-    type: "recharge",
-    amountPaise: totalPaise,
-    bonusPaise,
-    balanceAfterPaise: newBalancePaise,
-    providerPaymentId: syntheticPaymentId,
-    providerOrderId: pending.orderId,
-    description: `Wallet recharge (simulated) ${pending.packId.replace("pack_", "₹")}${bonusPaise > 0 ? ` (+₹${bonusPaise / 100} bonus)` : ""}`,
-  });
-
-  await db.insert(processedPayments).values({
-    providerPaymentId: syntheticPaymentId,
+  const wonClaim = await claimProcessedPayment({
+    paymentId: syntheticPaymentId,
     userId: pending.userId,
     orderId: pending.orderId,
     amountPaise: totalPaise,
   });
-
-  await db.delete(pendingOrders).where(eq(pendingOrders.orderId, pending.orderId));
-
-  return {
-    success: true,
-    duplicate: false,
-    balance: newBalancePaise / 100,
-    amount: amountPaise / 100,
-    bonus: bonusPaise / 100,
-    total: totalPaise / 100,
-    transactionId,
-  };
+  if (!wonClaim) {
+    const wallet = await getOrCreateWallet(args.authenticatedUserId);
+    return {
+      success: true, duplicate: true, balance: wallet.balancePaise / 100,
+      amount: 0, bonus: 0, total: 0, transactionId: syntheticPaymentId,
+    };
+  }
+  try {
+    return await creditRechargeInternal({
+      userId: pending.userId,
+      orderId: pending.orderId,
+      paymentId: syntheticPaymentId,
+      packId: pending.packId,
+      amountPaise,
+      simulated: true,
+    });
+  } catch (err) {
+    await releaseProcessedPaymentClaim(syntheticPaymentId);
+    throw err;
+  }
 }
 
 /** Read-only user lookup for response shaping. */
 export async function getUserById(userId: string) {
   const rows = await db.select().from(users).where(eq(users.id, userId)).limit(1);
   return rows[0] ?? null;
+}
+
+// ---------------------------------------------------------------------------
+// Razorpay webhook — the safety net for "app killed mid-flow".
+// ---------------------------------------------------------------------------
+
+/**
+ * Verify the Razorpay webhook signature: hex(HMAC-SHA256(rawBody, key_secret))
+ * compared against the `x-razorpay-signature` header with timingSafeEqual.
+ * The RAW request body bytes are required (req.rawBody, stashed by the json
+ * middleware in index.ts) — never the re-serialized JSON.
+ */
+export function verifyRazorpayWebhookSignature(rawBody: Buffer, signature: string): boolean {
+  const secret = process.env.RAZORPAY_KEY_SECRET;
+  if (!secret || !rawBody || !signature) return false;
+  const expected = createHmac("sha256", secret).update(rawBody).digest("hex");
+  const a = Buffer.from(expected, "utf8");
+  const b = Buffer.from(signature, "utf8");
+  return a.length === b.length && timingSafeEqual(a, b);
+}
+
+export interface WebhookHandleResult {
+  handled: boolean;
+  duplicate: boolean;
+  event: string;
+}
+
+/**
+ * Handle a verified Razorpay webhook event. Only `payment.captured` credits
+ * the wallet (captured = money actually moved). Runs through the same atomic
+ * idempotent credit path as /verify, so a webhook + client verify racing
+ * each other still credit exactly once. Always safe to call — unknown events
+ * and unknown orders are acknowledged without credit.
+ */
+export async function handleRazorpayWebhookEvent(event: {
+  event?: string;
+  payload?: { payment?: { entity?: Record<string, unknown> } };
+}): Promise<WebhookHandleResult> {
+  const eventName = typeof event?.event === "string" ? event.event : "";
+  if (eventName !== "payment.captured") {
+    return { handled: false, duplicate: false, event: eventName };
+  }
+  const entity = event?.payload?.payment?.entity ?? {};
+  const paymentId = typeof entity.id === "string" ? entity.id : "";
+  const orderId = typeof entity.order_id === "string" ? entity.order_id : "";
+  if (!paymentId || !orderId) {
+    return { handled: false, duplicate: false, event: eventName };
+  }
+  // Webhooks ignore order expiry: Razorpay itself confirms the capture.
+  const pending = await loadPendingOrder(orderId, true);
+  if (!pending) {
+    // Unknown order (already verified+consumed, or never ours) — acknowledge.
+    return { handled: false, duplicate: await isPaymentProcessed(paymentId), event: eventName };
+  }
+  const amountPaise = Number(pending.amountPaise);
+  const bonusPaise = calculateBonusPaise(amountPaise);
+  const totalPaise = amountPaise + bonusPaise;
+  const wonClaim = await claimProcessedPayment({
+    paymentId,
+    userId: pending.userId,
+    orderId,
+    amountPaise: totalPaise,
+  });
+  if (!wonClaim) {
+    return { handled: true, duplicate: true, event: eventName };
+  }
+  try {
+    await creditRechargeInternal({
+      userId: pending.userId,
+      orderId,
+      paymentId,
+      packId: pending.packId,
+      amountPaise,
+      simulated: false,
+    });
+    return { handled: true, duplicate: false, event: eventName };
+  } catch (err) {
+    await releaseProcessedPaymentClaim(paymentId);
+    throw err;
+  }
 }
