@@ -51,7 +51,15 @@ app.use(
     credentials: true,
   }),
 );
-app.use(express.json({ limit: "8mb" }));
+app.use(express.json({
+  limit: "8mb",
+  // 2026-10-02: stash the raw body bytes so the Razorpay webhook can verify
+  // the x-razorpay-signature HMAC (it must be computed over the exact bytes
+  // Razorpay sent, not re-serialized JSON).
+  verify: (req, _res, buf) => {
+    (req as unknown as { rawBody?: Buffer }).rawBody = buf;
+  },
+}));
 
 registerRoutes(app);
 registerCreatorRoutes(app);
