@@ -1309,7 +1309,7 @@ export function registerCreatorRoutes(app: Express): void {
   });
 
   /** Bill a finished call: debit user, credit creator, update totals. Idempotent-ish. */
-  async function settleCall(sessionId: string): Promise<{ durationSec: number; costPaise: number } | null> {
+  async function settleCall(sessionId: string, opts?: { effectiveEnd?: Date; ignoreHeartbeatFallback?: boolean }): Promise<{ durationSec: number; costPaise: number } | null> {
     // RACE FIX (2026-09-28): claim the session atomically — concurrent /end
     // requests (user hangup + creator hangup + heartbeat timeout) must not
     // double-debit. Only the request whose UPDATE flips the status proceeds.
@@ -1334,7 +1334,10 @@ export function registerCreatorRoutes(app: Express): void {
     const creatorId = s.creator_id as string;
     const ratePaisePerMin = Number(s.rate_paise_per_min ?? 0);
     const startedAt = s.started_at ? new Date(s.started_at as string) : null;
-    const endedAt = new Date();
+    // 2026-10-02 zombie sweep: effectiveEnd caps billing at the last evidence
+    // of life (last heartbeat + grace), never "now" — a session stuck active
+    // for 82h must not bill 82h.
+    const endedAt = opts?.effectiveEnd ?? new Date();
     if (!startedAt) {
       // Never answered — no charge.
       await db
@@ -1351,7 +1354,15 @@ export function registerCreatorRoutes(app: Express): void {
     //    billable (active-session) heartbeat is the fallback signal. A failed
     //    call runs no heartbeat, so it still settles at ₹0.
     const confirmedRaw = (s.media_confirmed_at ?? s.billable_heartbeat_at ?? null) as string | null;
-    const billingStart = confirmedRaw ? new Date(confirmedRaw) : null;
+    // 2026-10-02 zombie sweep: when closing a dead session (no /end ever
+    // arrived), the heartbeat fallback is not trustworthy billing evidence —
+    // only confirmed two-sided media bills. Normal /end keeps the fallback
+    // for pre-fix clients.
+    const billingStart = s.media_confirmed_at
+      ? new Date(s.media_confirmed_at as string)
+      : opts?.ignoreHeartbeatFallback || !confirmedRaw
+        ? null
+        : new Date(confirmedRaw);
     if (!billingStart) {
       // Media never confirmed — failed / never-connected call: NO CHARGE.
       // (Previously this billed a full minimum minute — the reported
@@ -1389,6 +1400,42 @@ export function registerCreatorRoutes(app: Express): void {
     );
     return { durationSec, costPaise: actual };
   }
+
+  /**
+   * Zombie sweeper (2026-10-02): an 'active' session with no heartbeat for
+   * 30+ minutes is dead — the app died or was killed before calling /end
+   * (this produced the 82-hour "Active" ghost on the dashboard). Settle each
+   * through settleCall with billing capped at last heartbeat + 60s grace
+   * (never "now"), and without the heartbeat billing fallback: a session
+   * that never confirmed two-sided media settles at ₹0. Runs once at boot
+   * and every 10 minutes; never throws.
+   */
+  async function sweepZombieActiveSessions(): Promise<void> {
+    try {
+      const cutoff = new Date(Date.now() - 30 * 60 * 1000).toISOString();
+      const rows = (await sql(
+        `SELECT id, last_heartbeat_at FROM call_sessions
+         WHERE status = 'active' AND last_heartbeat_at < $1`,
+        [cutoff],
+      )) as Array<Record<string, unknown>>;
+      for (const r of rows) {
+        try {
+          const lastBeatRaw = r.last_heartbeat_at as string | null;
+          const lastBeat = lastBeatRaw ? new Date(lastBeatRaw) : new Date(Date.now() - 30 * 60 * 1000);
+          await settleCall(String(r.id), {
+            effectiveEnd: new Date(lastBeat.getTime() + 60_000),
+            ignoreHeartbeatFallback: true,
+          });
+        } catch {
+          /* settle the next one */
+        }
+      }
+    } catch {
+      /* never crash the server on a sweep */
+    }
+  }
+  void sweepZombieActiveSessions();
+  setInterval(() => { void sweepZombieActiveSessions(); }, 10 * 60 * 1000);
 
   app.post("/api/call/sessions/:id/end", authenticateToken, async (req: Request, res: Response) => {
     try {
