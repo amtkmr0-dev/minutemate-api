@@ -313,6 +313,23 @@ export const callSessions = pgTable(
     startedAt: timestamp("started_at", { withTimezone: true }),
     endedAt: timestamp("ended_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    /**
+     * Billing justice (2026-10-02): two-sided media confirmation.
+     * Each side POSTs /media-confirmed when it is publishing AND playing the
+     * remote stream. mediaConfirmedAt is set when BOTH sides have reported —
+     * billing starts here, never at accept. A call that never confirms media
+     * bills ₹0, automatically.
+     */
+    userMediaAt: timestamp("user_media_at", { withTimezone: true }),
+    creatorMediaAt: timestamp("creator_media_at", { withTimezone: true }),
+    mediaConfirmedAt: timestamp("media_confirmed_at", { withTimezone: true }),
+    /**
+     * Backward-compat billing signal for pre-2026-10-02 clients, which never
+     * POST /media-confirmed. Stamped by the billable (active-session)
+     * heartbeat path only, so a failed call (no heartbeat ever ran) still
+     * settles at ₹0 while old-client successful calls keep billing.
+     */
+    billableHeartbeatAt: timestamp("billable_heartbeat_at", { withTimezone: true }),
   },
   (t) => [
     index("call_sessions_user_idx").on(t.userId, t.createdAt),
