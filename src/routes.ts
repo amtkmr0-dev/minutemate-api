@@ -45,10 +45,12 @@ import {
   RECHARGE_PACKS,
   createRechargeOrder,
   getUserById,
+  handleRazorpayWebhookEvent,
   isSimulationAllowed,
   PaymentNotConfiguredError,
   simulateSuccessfulPayment,
   verifyAndCreditPayment,
+  verifyRazorpayWebhookSignature,
 } from "./payments.js";
 import { getTransactionHistory, getWalletSummary } from "./wallet.js";
 import crypto from "node:crypto";
@@ -431,6 +433,36 @@ export function registerRoutes(app: Express): void {
     }
   });
 
+  /**
+   * Razorpay webhook (2026-10-02) — the safety net for "app killed mid-flow".
+   * No auth header (Razorpay signs the payload instead): the
+   * `x-razorpay-signature` HMAC is verified against the RAW request body.
+   * `payment.captured` events credit the wallet through the same atomic
+   * idempotent path as /verify, so a webhook racing a client verify still
+   * credits exactly once. Always 200 after signature verification so
+   * Razorpay does not retry handled events.
+   */
+  app.post("/api/payments/webhook", async (req: Request, res: Response) => {
+    try {
+      const signature = req.get("x-razorpay-signature") || "";
+      const rawBody = (req as Request & { rawBody?: Buffer }).rawBody;
+      if (!rawBody || !verifyRazorpayWebhookSignature(rawBody, signature)) {
+        res.status(400).json({ error: "Invalid webhook signature." });
+        return;
+      }
+      const event = JSON.parse(rawBody.toString("utf8")) as {
+        event?: string;
+        payload?: { payment?: { entity?: Record<string, unknown> } };
+      };
+      const result = await handleRazorpayWebhookEvent(event);
+      res.json({ ok: true, ...result });
+    } catch (err) {
+      // 500s make Razorpay retry — correct for transient DB failures, since
+      // the credit path is idempotent.
+      httpError(res, err, "Webhook handling failed.");
+    }
+  });
+
   // ------------------------------------------------------------------ wallet
 
   const walletHandler = async (req: Request, res: Response) => {
@@ -514,8 +546,16 @@ export function registerRoutes(app: Express): void {
       // connections (user saw "Couldn't Start Call", creator saw "Demo call mode").
       // Use ZEGO_SERVER_URL from env, falling back to the standard ZegoCloud
       // WebSocket pattern for this AppID.
-      const serverUrl =
+      // 2026-10-02: normalize the scheme — the Zego Web SDK needs wss://. A
+      // copied https:// URL (or scheme-less host) would make loginRoom time
+      // out after a few seconds with no useful error, so fix it defensively.
+      const rawServerUrl =
         process.env.ZEGO_SERVER_URL || `wss://webliveroom${appId}-api.zegocloud.com/ws`;
+      const serverUrl = /^wss:\/\//i.test(rawServerUrl)
+        ? rawServerUrl
+        : rawServerUrl.includes("://")
+          ? rawServerUrl.replace(/^(https?:)?\/\//i, "wss://")
+          : `wss://${rawServerUrl}`;
       res.json({ appId, serverUrl, token, userId: zegoUserId, roomId, expiresIn: 3600 });
     } catch (err) {
       httpError(res, err, "Could not generate call token.");
