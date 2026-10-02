@@ -1322,10 +1322,20 @@ export function registerCreatorRoutes(app: Express): void {
       [sessionId],
     )) as Array<Record<string, unknown>>;
     if (claimed.length === 0) {
-      // Another request already settled (or is settling) this session —
-      // return the recorded final state instead of charging again.
-      const rows = await db.select().from(callSessions).where(eq(callSessions.id, sessionId)).limit(1);
-      const s = rows[0];
+      // Another request already settled (or is settling) this session.
+      // 2026-10-02 RACE FIX: the winner may still be mid-settlement
+      // (status='settling') with costPaise/durationSec not yet written — a
+      // blind read here returns a stale (0, 0), so the loser's client logged
+      // "₹0" in call history while the wallet correctly showed the debit.
+      // Poll briefly for the terminal state so we return FINAL numbers.
+      const deadline = Date.now() + 5000;
+      let s: typeof callSessions.$inferSelect | undefined;
+      while (Date.now() < deadline) {
+        const r = await db.select().from(callSessions).where(eq(callSessions.id, sessionId)).limit(1);
+        s = r[0];
+        if (!s || s.status === "ended" || s.status === "cancelled" || s.status === "rejected" || s.status === "missed") break;
+        await new Promise((res) => setTimeout(res, 250));
+      }
       if (!s) return null;
       return { durationSec: s.durationSec ?? 0, costPaise: Number(s.costPaise ?? 0) };
     }
