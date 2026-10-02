@@ -86,26 +86,6 @@ app.get(
   },
 );
 
-// 2026-10-02: QA preview of the rebuilt dashboard — same page, separate URL
-// so the live /admin stays untouched until QA passes. Remove after promotion.
-app.get(
-  "/admin-qa",
-  helmet({
-    contentSecurityPolicy: {
-      directives: {
-        "script-src": ["'self'", "'unsafe-inline'"],
-        "style-src": ["'self'", "'unsafe-inline'"],
-        "connect-src": ["'self'", "https:"],
-        "img-src": ["'self'", "data:", "https:"],
-      },
-    },
-    crossOriginEmbedderPolicy: false,
-  }),
-  (_req, res) => {
-    res.sendFile(path.join(__dirname, "..", "public", "admin-qa.html"));
-  },
-);
-
 // 404 for unknown API routes — keeps clients from misreading HTML error pages.
 app.use("/api", (_req, res) => {
   res.status(404).json({ error: "Not found" });
