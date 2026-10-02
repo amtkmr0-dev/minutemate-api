@@ -126,11 +126,20 @@ const DDL: string[] = [
     last_heartbeat_at timestamp with time zone,
     started_at timestamp with time zone,
     ended_at timestamp with time zone,
-    created_at timestamp with time zone NOT NULL DEFAULT now()
+    created_at timestamp with time zone NOT NULL DEFAULT now(),
+    user_media_at timestamp with time zone,
+    creator_media_at timestamp with time zone,
+    media_confirmed_at timestamp with time zone,
+    billable_heartbeat_at timestamp with time zone
   )`,
   `CREATE INDEX IF NOT EXISTS call_sessions_user_idx ON call_sessions (user_id, created_at)`,
   `CREATE INDEX IF NOT EXISTS call_sessions_creator_idx ON call_sessions (creator_id, created_at)`,
   `CREATE INDEX IF NOT EXISTS call_sessions_status_idx ON call_sessions (status, created_at)`,
+  // billing justice (2026-10-02): two-sided media confirmation columns
+  `ALTER TABLE call_sessions ADD COLUMN IF NOT EXISTS user_media_at timestamp with time zone`,
+  `ALTER TABLE call_sessions ADD COLUMN IF NOT EXISTS creator_media_at timestamp with time zone`,
+  `ALTER TABLE call_sessions ADD COLUMN IF NOT EXISTS media_confirmed_at timestamp with time zone`,
+  `ALTER TABLE call_sessions ADD COLUMN IF NOT EXISTS billable_heartbeat_at timestamp with time zone`,
 
   // gift catalog
   `CREATE TABLE IF NOT EXISTS gifts (
