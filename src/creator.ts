@@ -219,6 +219,13 @@ function sessionView(s: typeof callSessions.$inferSelect) {
     cost: Number(s.costPaise) / 100,
     costPaise: Number(s.costPaise),
     startedAt: s.startedAt?.toISOString() ?? null,
+    // 2026-10-02: the client anchors both call timers on `acceptedAt`
+    // (previously missing → timers stuck at 00:00). Accept time == startedAt.
+    acceptedAt: s.startedAt?.toISOString() ?? null,
+    // 2026-10-02 billing justice: two-sided media confirmation timestamps.
+    userMediaAt: s.userMediaAt?.toISOString() ?? null,
+    creatorMediaAt: s.creatorMediaAt?.toISOString() ?? null,
+    mediaConfirmedAt: s.mediaConfirmedAt?.toISOString() ?? null,
     endedAt: s.endedAt?.toISOString() ?? null,
     createdAt: s.createdAt.toISOString(),
   };
@@ -1185,13 +1192,20 @@ export function registerCreatorRoutes(app: Express): void {
           });
           return;
         }
-        await db.update(callSessions).set({ lastHeartbeatAt: new Date() }).where(eq(callSessions.id, s.id));
+        // 2026-10-02 billing justice: stamp the backward-compat billing
+        // signal (pre-media-confirm clients never POST /media-confirmed) and
+        // tell the client whether two-sided media is confirmed.
+        await db.update(callSessions).set({
+          lastHeartbeatAt: new Date(),
+          billableHeartbeatAt: s.billableHeartbeatAt ?? new Date(),
+        }).where(eq(callSessions.id, s.id));
         res.json({
           success: true,
           status: s.status,
           minutesBilled,
           remainingSeconds,
           terminate: false,
+          mediaConfirmed: !!s.mediaConfirmedAt,
         });
         return;
       }
@@ -1200,6 +1214,56 @@ export function registerCreatorRoutes(app: Express): void {
       res.json({ success: true, status: s.status, minutesBilled: 0, remainingSeconds: 0, terminate: true });
     } catch (err) {
       httpError(res, err, "Heartbeat failed.");
+    }
+  });
+
+  /**
+   * Two-sided media confirmation (2026-10-02, billing justice).
+   * Each client POSTs here once it is BOTH publishing its own stream AND
+   * successfully playing the remote stream. The server stamps that side;
+   * when both sides have reported, mediaConfirmedAt is set and billing
+   * becomes legitimate. A call that never reaches this state settles at ₹0.
+   */
+  app.post("/api/call/sessions/:id/media-confirmed", authenticateToken, async (req: Request, res: Response) => {
+    try {
+      const userId = authed(req);
+      const rows = await db.select().from(callSessions).where(eq(callSessions.id, req.params.id)).limit(1);
+      const s = rows[0];
+      if (!s || (s.userId !== userId && s.creatorId !== userId)) {
+        res.status(404).json({ error: "Call not found." });
+        return;
+      }
+      if (s.status !== "active") {
+        res.json({ success: true, mediaConfirmed: !!s.mediaConfirmedAt, status: s.status });
+        return;
+      }
+      const side = s.userId === userId ? "user" : "creator";
+      const col = side === "user" ? "user_media_at" : "creator_media_at";
+      await sql(
+        `UPDATE call_sessions SET ${col} = COALESCE(${col}, now())
+         WHERE id = $1`,
+        [s.id],
+      );
+      // Confirm when both sides have reported (idempotent — first wins).
+      const check = (await sql(
+        `UPDATE call_sessions SET media_confirmed_at = now()
+         WHERE id = $1 AND media_confirmed_at IS NULL
+           AND user_media_at IS NOT NULL AND creator_media_at IS NOT NULL
+         RETURNING media_confirmed_at`,
+        [s.id],
+      )) as Array<Record<string, unknown>>;
+      const now = (await db.select({
+        mediaConfirmedAt: callSessions.mediaConfirmedAt,
+      }).from(callSessions).where(eq(callSessions.id, s.id)).limit(1))[0];
+      res.json({
+        success: true,
+        side,
+        mediaConfirmed: !!now?.mediaConfirmedAt,
+        mediaConfirmedAt: now?.mediaConfirmedAt?.toISOString() ?? null,
+        justConfirmed: check.length > 0,
+      });
+    } catch (err) {
+      httpError(res, err, "Could not record media confirmation.");
     }
   });
 
@@ -1253,7 +1317,8 @@ export function registerCreatorRoutes(app: Express): void {
       `UPDATE call_sessions
        SET status = 'settling'
        WHERE id = $1 AND status IN ('ringing', 'active')
-       RETURNING id, user_id, creator_id, rate_paise_per_min, started_at`,
+       RETURNING id, user_id, creator_id, rate_paise_per_min, started_at,
+                 media_confirmed_at, billable_heartbeat_at`,
       [sessionId],
     )) as Array<Record<string, unknown>>;
     if (claimed.length === 0) {
@@ -1279,7 +1344,26 @@ export function registerCreatorRoutes(app: Express): void {
       return { durationSec: 0, costPaise: 0 };
     }
     const durationSec = Math.max(0, Math.round((endedAt.getTime() - startedAt.getTime()) / 1000));
-    const billableMin = Math.max(1, Math.ceil(durationSec / 60));
+    // BILLING JUSTICE (2026-10-02): billing starts ONLY on confirmed
+    // two-sided media — never at accept, never on local preview.
+    //  - media_confirmed_at: both sides reported publish+play (new clients).
+    //  - billable_heartbeat_at: pre-fix clients never report media; their
+    //    billable (active-session) heartbeat is the fallback signal. A failed
+    //    call runs no heartbeat, so it still settles at ₹0.
+    const confirmedRaw = (s.media_confirmed_at ?? s.billable_heartbeat_at ?? null) as string | null;
+    const billingStart = confirmedRaw ? new Date(confirmedRaw) : null;
+    if (!billingStart) {
+      // Media never confirmed — failed / never-connected call: NO CHARGE.
+      // (Previously this billed a full minimum minute — the reported
+      // "money deducted for a failed call" injustice.)
+      await db
+        .update(callSessions)
+        .set({ status: "ended", durationSec, costPaise: 0, endedAt })
+        .where(eq(callSessions.id, sessionId));
+      return { durationSec, costPaise: 0 };
+    }
+    const billableSec = Math.max(0, Math.round((endedAt.getTime() - billingStart.getTime()) / 1000));
+    const billableMin = Math.max(1, Math.ceil(billableSec / 60));
     const fullCost = billableMin * ratePaisePerMin;
     // Debit what is available (never negative).
     let debited = await debitUserWallet(userId, fullCost);
@@ -1315,17 +1399,34 @@ export function registerCreatorRoutes(app: Express): void {
         res.status(404).json({ error: "Call not found." });
         return;
       }
+      // 2026-10-02: server-authoritative bill figures for the client summary
+      // screen (previously the client computed these itself). minutesBilled
+      // is derived from the actual debit, not the wall-clock duration, so it
+      // matches the ledger exactly (billing starts at media confirmation).
+      const toBillView = (costPaise: number, ratePaisePerMin: number) => {
+        const minutesBilled = costPaise > 0 && ratePaisePerMin > 0
+          ? Math.max(1, Math.round(costPaise / ratePaisePerMin))
+          : 0;
+        return { minutesBilled, totalCharged: costPaise / 100 };
+      };
       if (s.status === "ended" || s.status === "rejected" || s.status === "missed" || s.status === "cancelled") {
-        res.json({ success: true, sessionId: s.id, status: s.status, durationSec: s.durationSec, cost: Number(s.costPaise) / 100 });
+        const costPaiseDone = Number(s.costPaise ?? 0);
+        res.json({
+          success: true, sessionId: s.id, status: s.status, durationSec: s.durationSec,
+          cost: costPaiseDone / 100,
+          ...toBillView(costPaiseDone, Number(s.ratePaisePerMin ?? 0)),
+        });
         return;
       }
       const settled = await settleCall(s.id);
+      const costPaise = settled?.costPaise ?? 0;
       res.json({
         success: true,
         sessionId: s.id,
         status: s.startedAt ? "ended" : "cancelled",
         durationSec: settled?.durationSec ?? 0,
-        cost: (settled?.costPaise ?? 0) / 100,
+        cost: costPaise / 100,
+        ...toBillView(costPaise, Number(s.ratePaisePerMin ?? 0)),
       });
     } catch (err) {
       httpError(res, err, "Could not end the call.");
