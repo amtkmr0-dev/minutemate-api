@@ -28,10 +28,10 @@ import type { Express, Request, Response } from "express";
 import express from "express";
 import { eq } from "drizzle-orm";
 import { db, sql } from "./db.js";
-import { users } from "./schema.js";
+import { callSessions, users } from "./schema.js";
 import {
   authenticateToken,
-  issueOtp,
+  sendOtp,
   normalizeIndianMobile,
   revokeRefreshToken,
   rotateRefreshToken,
@@ -54,11 +54,13 @@ import {
 } from "./payments.js";
 import { getTransactionHistory, getWalletSummary } from "./wallet.js";
 import crypto from "node:crypto";
+import { getSmsProvider, SmsError } from "./sms.js";
+import { getZegoConfig } from "./zego.js";
 
 function httpError(res: Response, err: unknown, fallback: string): void {
   const status = (err as { statusCode?: number })?.statusCode ?? 500;
   const message = err instanceof Error ? err.message : fallback;
-  res.status(status).json({ error: message });
+  res.status(status).json({ error: message, ...(err instanceof SmsError ? { code: err.code, smsConfigured: err.smsConfigured } : {}) });
 }
 
 /**
@@ -111,8 +113,8 @@ function generateZegoToken04(
   return "04" + buf.toString("base64");
 }
 
-function publicUser(user: { id: string; phone: string; name: string | null; email: string | null }) {
-  return { id: user.id, phone: user.phone, name: user.name, email: user.email };
+function publicUser(user: { id: string; phone: string; name: string | null; email: string | null; role: string; avatarUrl: string | null }) {
+  return { id: user.id, phone: user.phone, name: user.name, email: user.email, role: user.role, avatarUrl: user.avatarUrl };
 }
 
 export function registerRoutes(app: Express): void {
@@ -134,13 +136,8 @@ export function registerRoutes(app: Express): void {
       return;
     }
     try {
-      const { otp } = await issueOtp(phone);
-      // Production: send `otp` via the SMS provider here (MSG91/Twilio/Exotel).
-      // Dev: log it so the flow is testable without an SMS provider.
-      if (process.env.NODE_ENV !== "production") {
-        console.log(`[otp] ${phone} -> ${otp}`);
-      }
-      res.json({ success: true, message: "OTP sent successfully" });
+      await sendOtp(phone);
+      res.json({ success: true, message: "OTP accepted by SMS provider. Delivery may take a moment.", smsConfigured: true });
     } catch (err: any) {
       // BUG 13 fix (2026-09-30): return 429 for cooldown violations so the
       // client can show a "wait X seconds" message instead of a generic error.
@@ -149,30 +146,6 @@ export function registerRoutes(app: Express): void {
         return;
       }
       httpError(res, err, "Could not send OTP. Please try again.");
-    }
-  });
-
-  /**
-   * Dev/testing — retrieve the current OTP for a phone number.
-   * Only for testing until SMS is configured. DELETE THIS before production launch.
-   */
-  app.get("/api/auth/dev-otp", async (req: Request, res: Response) => {    const secret = req.query.secret as string;
-    // Temporary testing secret — remove endpoint before production
-    if (secret !== "mm-test-2026") {
-      res.status(403).json({ error: "Forbidden" });
-      return;
-    }
-    const phone = normalizeIndianMobile(req.query.phone);
-    if (!phone) {
-      res.status(400).json({ error: "Invalid phone number" });
-      return;
-    }
-    try {
-      // Generate a fresh OTP and return it directly (testing only).
-      const { otp } = await issueOtp(phone);
-      res.json({ success: true, phone, otp });
-    } catch (err) {
-      httpError(res, err, "Could not retrieve OTP");
     }
   });
 
@@ -187,7 +160,7 @@ export function registerRoutes(app: Express): void {
     try {
       const result = await verifyOtp(phone, String(body.otp ?? ""));
       if (!result.ok) {
-        res.status(result.status).json({ error: result.error });
+        res.status(result.status).json({ error: result.error, ...(result.code ? { code: result.code } : {}) });
         return;
       }
       const accessToken = signAccessToken(result.userId);
@@ -225,6 +198,7 @@ export function registerRoutes(app: Express): void {
     try {
       // Check if this phone belongs to an admin. Use generic response
       // to prevent enumeration.
+      if (!getSmsProvider()) throw new SmsError("SMS_NOT_CONFIGURED", false);
       const adminUser = await db.select().from(users).where(eq(users.phone, phone)).limit(1);
       if (!adminUser[0] || adminUser[0].role !== "admin") {
         // Generic response — don't reveal whether this is an admin number.
@@ -233,11 +207,8 @@ export function registerRoutes(app: Express): void {
         res.json({ success: true, message: "If this is an admin number, an OTP has been sent." });
         return;
       }
-      const { otp } = await issueOtp(phone);
-      if (process.env.NODE_ENV !== "production") {
-        console.log(`[admin-otp] ${phone} -> ${otp}`);
-      }
-      res.json({ success: true, message: "OTP sent successfully" });
+      await sendOtp(phone);
+      res.json({ success: true, message: "OTP accepted by SMS provider. Delivery may take a moment.", smsConfigured: true });
     } catch (err: any) {
       // BUG 13 fix (2026-09-30): 429 for cooldown.
       if (err?.message?.includes("Please wait")) {
@@ -264,7 +235,7 @@ export function registerRoutes(app: Express): void {
       }
       const result = await verifyOtp(phone, String(body.otp ?? ""));
       if (!result.ok) {
-        res.status(result.status).json({ error: result.error });
+        res.status(result.status).json({ error: result.error, ...(result.code ? { code: result.code } : {}) });
         return;
       }
       // Double-check the verified user is still an admin (role could have changed).
@@ -322,7 +293,7 @@ export function registerRoutes(app: Express): void {
       if (candidate) {
         try {
           const { default: jwt } = await import("jsonwebtoken");
-          const secret = process.env.JWT_SECRET || "dev-only-insecure-secret-change-me";
+          const secret = process.env.JWT_SECRET || "";
           const payload = jwt.verify(candidate, secret) as { typ?: string; jti?: string };
           if (payload.typ === "refresh" && payload.jti) {
             await revokeRefreshToken(payload.jti);
@@ -365,7 +336,7 @@ export function registerRoutes(app: Express): void {
       });
     } catch (err) {
       if (err instanceof PaymentNotConfiguredError) {
-        res.status(500).json({ error: err.message });
+        res.status(err.statusCode).json({ error: err.message, code: err.code });
         return;
       }
       const isValidation = /amount|pack/i.test(err instanceof Error ? err.message : "");
@@ -411,8 +382,7 @@ export function registerRoutes(app: Express): void {
 
   /**
    * Dev-only — complete a SIM_ order without the Razorpay dashboard.
-   * Only works when PAYMENTS_MODE=simulation (never in production unless
-   * explicitly enabled); otherwise 403.
+   * Only works with both simulation switches outside production; otherwise 403.
    */
   app.post("/api/payments/simulate-success", authenticateToken, async (req: Request, res: Response) => {
     if (!isSimulationAllowed()) {
@@ -509,32 +479,41 @@ export function registerRoutes(app: Express): void {
   /**
    * Zego token — real Token04 generation (ZEGOCLOUD zego_server_assistant algorithm).
    * Requires ZEGO_APP_ID and ZEGO_SERVER_SECRET env vars on the server.
-   * Without them, returns unconfigured:true so the app shows a notice.
+   * Without valid configuration, returns 503 + unconfigured:true and no token.
    */
   app.post("/api/zego/token", authenticateToken, async (req: Request, res: Response) => {
-    const body = (req.body as { sessionId?: string } | undefined) ?? {};
-    const appId = Number(process.env.ZEGO_APP_ID || "0");
-    const serverSecret = process.env.ZEGO_SERVER_SECRET || "";
-    const userId = (req as AuthenticatedRequest).userId;
-    const zegoUserId = `user_${userId}`;
-    const roomId = body.sessionId || `room_${Date.now()}`;
-    if (!appId || !serverSecret) {
-      // Dummy mode: return a placeholder so the UI flow can be tested.
-      // The Zego SDK will fail to connect with this, which is expected
-      // until real credentials are added.
-      res.json({
-        appId: 0,
-        serverUrl: "",
-        token: "dummy-zego-token-unconfigured",
-        userId: zegoUserId,
-        roomId,
-        // Flag so the app can show "video unavailable" instead of crashing
-        unconfigured: true,
-        message: "Zego not configured. Add ZEGO_APP_ID and ZEGO_SERVER_SECRET to enable video calls.",
-      });
+    const body = (req.body as { sessionId?: unknown } | undefined) ?? {};
+    if (typeof body.sessionId !== "string" || !body.sessionId.trim() || body.sessionId.length > 128) {
+      res.status(400).json({ error: "sessionId is required." });
       return;
     }
     try {
+      const userId = (req as AuthenticatedRequest).userId;
+      const zegoUserId = `user_${userId}`;
+      const [session] = await db.select().from(callSessions).where(eq(callSessions.id, body.sessionId)).limit(1);
+      if (!session || (session.userId !== userId && session.creatorId !== userId)) {
+        res.status(404).json({ error: "Call not found." });
+        return;
+      }
+      if (session.status !== "active") {
+        res.status(409).json({ error: "Call must be accepted and active before joining media.", code: "CALL_NOT_ACTIVE" });
+        return;
+      }
+      const roomId = session.roomId;
+      if (!roomId.trim()) {
+        res.status(409).json({ error: "This call has no media room.", code: "CALL_ROOM_UNAVAILABLE" });
+        return;
+      }
+      const config = getZegoConfig();
+      if (!config) {
+        res.status(503).json({
+          error: "Call media is not configured on this server.",
+          code: "ZEGO_NOT_CONFIGURED",
+          unconfigured: true,
+        });
+        return;
+      }
+      const { appId, serverSecret, serverUrl } = config;
       // RTC-room payload: allow loginRoom (1) + publishStream (2)
       const payload = JSON.stringify({
         room_id: roomId,
@@ -542,20 +521,7 @@ export function registerRoutes(app: Express): void {
         stream_id_list: null,
       });
       const token = generateZegoToken04(appId, zegoUserId, serverSecret, 3600, payload);
-      // 2026-09-29: serverUrl was hardcoded to "" which broke all Zego media
-      // connections (user saw "Couldn't Start Call", creator saw "Demo call mode").
-      // Use ZEGO_SERVER_URL from env, falling back to the standard ZegoCloud
-      // WebSocket pattern for this AppID.
-      // 2026-10-02: normalize the scheme — the Zego Web SDK needs wss://. A
-      // copied https:// URL (or scheme-less host) would make loginRoom time
-      // out after a few seconds with no useful error, so fix it defensively.
-      const rawServerUrl =
-        process.env.ZEGO_SERVER_URL || `wss://webliveroom${appId}-api.zegocloud.com/ws`;
-      const serverUrl = /^wss:\/\//i.test(rawServerUrl)
-        ? rawServerUrl
-        : rawServerUrl.includes("://")
-          ? rawServerUrl.replace(/^(https?:)?\/\//i, "wss://")
-          : `wss://${rawServerUrl}`;
+
       res.json({ appId, serverUrl, token, userId: zegoUserId, roomId, expiresIn: 3600 });
     } catch (err) {
       httpError(res, err, "Could not generate call token.");

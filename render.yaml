@@ -13,9 +13,9 @@ services:
       - key: DATABASE_URL
         sync: false
       - key: PAYMENTS_MODE
-        value: simulation
+        value: razorpay
       - key: PAYMENTS_SIMULATION_ENABLED
-        value: "true"
+        value: "false"
       - key: ALLOWED_ORIGINS
         value: "*"
       # Set these manually in the Render dashboard (never commit real values):

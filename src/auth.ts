@@ -6,25 +6,25 @@
  *      The phone is normalized to a 10-digit Indian mobile; anything else is
  *      rejected with 400. A 6-digit OTP is generated, SHA-256 hashed, and
  *      stored with a 5-minute TTL. Only the hash is stored — never the OTP.
- *      In production this is where the SMS provider call goes; in dev the
- *      OTP is logged to the console.
+ *      Sending requires an explicitly configured SMS provider; unconfigured
+ *      delivery fails closed. The OTP is never returned or logged by routes.
  *   2. Client POSTs { phone, otp } to /api/auth/verify-otp.
  *      On success the user row is created (first login) or fetched, and an
  *      access token (15 min) + refresh token (30 days, tracked jti) are
  *      issued.
  *   3. Authenticated routes use `Authorization: Bearer <access-token>`.
  *
- * Secrets: JWT_SECRET is REQUIRED in production — the server refuses to boot
- * without it. In non-production a loud warning is printed and a dev-only
- * fallback is used.
+ * Secrets: JWT_SECRET is required in every environment. There is no shared
+ * development signing key or test-authentication bypass.
  */
 
 import { createHash, randomInt, randomUUID } from "crypto";
 import type { Request, Response, NextFunction } from "express";
 import jwt from "jsonwebtoken";
-import { and, eq, gt } from "drizzle-orm";
+import { and, eq, gt, lt, sql } from "drizzle-orm";
 import { db } from "./db.js";
 import { otps, users, wallets, refreshTokens } from "./schema.js";
+import { getSmsProvider, SmsError } from "./sms.js";
 
 // ---------------------------------------------------------------------------
 // Config
@@ -33,14 +33,9 @@ import { otps, users, wallets, refreshTokens } from "./schema.js";
 function resolveJwtSecret(): string {
   const secret = process.env.JWT_SECRET;
   if (secret && secret.trim().length > 0) return secret;
-  if (process.env.NODE_ENV === "production") {
-    throw new Error(
-      "FATAL: JWT_SECRET is not set. Set JWT_SECRET to a long random value " +
-        "(e.g. `openssl rand -base64 64`) before starting in production.",
-    );
-  }
-  console.warn("[auth] JWT_SECRET is not set — using an INSECURE dev-only fallback. Never deploy like this.");
-  return "dev-only-insecure-secret-change-me";
+  throw new Error(
+    "FATAL: JWT_SECRET is not set. Configure a long random signing secret before starting the server.",
+  );
 }
 
 const JWT_SECRET = resolveJwtSecret();
@@ -98,42 +93,47 @@ export async function issueOtp(phone: string): Promise<{ otp: string; expiresAt:
   const otp = String(randomInt(100000, 1000000)); // 6 digits, no leading zero
   const expiresAt = new Date(Date.now() + OTP_TTL_MS);
 
-  await db
+  const issued = await db
     .insert(otps)
     .values({ phone, otpHash: sha256Hex(otp), expiresAt, attempts: 0 })
     .onConflictDoUpdate({
       target: otps.phone,
       set: { otpHash: sha256Hex(otp), expiresAt, attempts: 0, createdAt: new Date() },
-    });
+      setWhere: lt(otps.createdAt, new Date(Date.now() - COOLDOWN_MS)),
+    }).returning({ phone: otps.phone });
+  if (!issued[0]) throw new Error("Please wait 30 seconds before requesting a new OTP.");
 
   return { otp, expiresAt };
+}
+
+/** Create a challenge only when a provider exists, then await its acceptance. */
+export async function sendOtp(phone: string): Promise<void> {
+  const provider = getSmsProvider();
+  if (!provider) throw new SmsError("SMS_NOT_CONFIGURED", false);
+  const { otp, expiresAt } = await issueOtp(phone);
+  try {
+    await provider.sendOtp(phone, otp);
+  } catch {
+    // Do not remove a newer challenge if a slow provider request fails.
+    try {
+      await db.delete(otps).where(and(
+        eq(otps.phone, phone), eq(otps.otpHash, sha256Hex(otp)), eq(otps.expiresAt, expiresAt),
+      ));
+    } finally {
+      // Provider errors may contain phone numbers or credentials; never expose them.
+      throw new SmsError("SMS_DELIVERY_FAILED", true);
+    }
+  }
 }
 
 /** Result of an OTP verification attempt. */
 export type VerifyOtpResult =
   | { ok: true; userId: string; isNewUser: boolean }
-  | { ok: false; error: string; status: number };
+  | { ok: false; error: string; status: number; code?: string };
 
 export async function verifyOtp(phone: string, otp: string): Promise<VerifyOtpResult> {
   if (!/^\d{6}$/.test(otp)) {
     return { ok: false, error: "Enter the 6-digit OTP", status: 400 };
-  }
-
-  // ---------------------------------------------------------------------------
-  // TEMPORARY TEST ONLY — master OTP "123456" bypasses SMS verification.
-  // Lets testers log into ANY phone number in both the user and creator apps
-  // without a real SMS. !!! REMOVE BEFORE PRODUCTION LAUNCH !!!
-  // Anyone who knows this code can access any account.
-  // ---------------------------------------------------------------------------
-  if (otp === "123456") {
-    const existing = await db.select().from(users).where(eq(users.phone, phone)).limit(1);
-    if (existing[0]) {
-      return { ok: true, userId: existing[0].id, isNewUser: false };
-    }
-    const userId = randomUUID();
-    await db.insert(users).values({ id: userId, phone });
-    await db.insert(wallets).values({ userId, balancePaise: 0 });
-    return { ok: true, userId, isNewUser: true };
   }
 
   const rows = await db.select().from(otps).where(eq(otps.phone, phone)).limit(1);
@@ -141,7 +141,7 @@ export async function verifyOtp(phone: string, otp: string): Promise<VerifyOtpRe
   if (!challenge) {
     return { ok: false, error: "No OTP was requested for this number. Please request a new one.", status: 400 };
   }
-  if (challenge.expiresAt.getTime() < Date.now()) {
+  if (challenge.expiresAt.getTime() <= Date.now()) {
     await db.delete(otps).where(eq(otps.phone, phone));
     return { ok: false, error: "OTP expired. Please request a new one.", status: 400 };
   }
@@ -154,16 +154,34 @@ export async function verifyOtp(phone: string, otp: string): Promise<VerifyOtpRe
   if (!matches) {
     await db
       .update(otps)
-      .set({ attempts: Number(challenge.attempts) + 1 })
-      .where(eq(otps.phone, phone));
+      .set({ attempts: sql`${otps.attempts} + 1` })
+      .where(and(
+        eq(otps.phone, phone),
+        eq(otps.otpHash, challenge.otpHash),
+        gt(otps.expiresAt, new Date(Date.now())),
+        lt(otps.attempts, OTP_MAX_ATTEMPTS),
+      ));
     return { ok: false, error: "Incorrect OTP. Please try again.", status: 400 };
   }
 
-  // OTP correct — consume it (single use) and resolve the user.
-  await db.delete(otps).where(eq(otps.phone, phone));
+  // Claim the exact live challenge atomically. A concurrent verifier must not
+  // issue another session after this request consumes it.
+  const consumed = await db.delete(otps).where(and(
+    eq(otps.phone, phone),
+    eq(otps.otpHash, challenge.otpHash),
+    eq(otps.expiresAt, challenge.expiresAt),
+    gt(otps.expiresAt, new Date(Date.now())),
+    lt(otps.attempts, OTP_MAX_ATTEMPTS),
+  )).returning({ phone: otps.phone });
+  if (!consumed[0]) {
+    return { ok: false, error: "OTP is no longer valid. Please request a new one.", status: 400 };
+  }
 
   const existing = await db.select().from(users).where(eq(users.phone, phone)).limit(1);
   if (existing[0]) {
+    if (existing[0].status !== "active") {
+      return { ok: false, error: "This account is not active.", status: 403, code: "ACCOUNT_DISABLED" };
+    }
     return { ok: true, userId: existing[0].id, isNewUser: false };
   }
 
@@ -227,13 +245,14 @@ export async function rotateRefreshToken(
   if (payload.typ !== "refresh" || !payload.jti) return null;
 
   const rows = await db
-    .select()
-    .from(refreshTokens)
+    .delete(refreshTokens)
     .where(and(eq(refreshTokens.jti, payload.jti), gt(refreshTokens.expiresAt, new Date())))
-    .limit(1);
-  if (!rows[0]) return null; // revoked or expired
+    .returning();
+  if (!rows[0]) return null; // revoked, expired or another rotation won
 
-  await revokeRefreshToken(payload.jti);
+  const account = await db.select().from(users).where(eq(users.id, payload.userId)).limit(1);
+  if (!account[0] || account[0].status !== "active") return null;
+
   const accessToken = signAccessToken(payload.userId);
   const refreshToken = await signRefreshToken(payload.userId);
   return { accessToken, refreshToken, userId: payload.userId };
@@ -251,22 +270,37 @@ export interface AuthenticatedRequest extends Request {
  * Require a valid Bearer access token. Attaches req.userId.
  * Rejects the wrong token type (refresh tokens are not accepted here).
  */
-export function authenticateToken(req: Request, res: Response, next: NextFunction): void {
+export async function authenticateToken(req: Request, res: Response, next: NextFunction): Promise<void> {
   const header = req.headers.authorization;
   const token = header?.startsWith("Bearer ") ? header.slice(7) : null;
   if (!token) {
     res.status(401).json({ error: "Authentication required. Please log in." });
     return;
   }
+  let payload: AccessTokenPayload;
   try {
-    const payload = jwt.verify(token, JWT_SECRET) as AccessTokenPayload;
+    payload = jwt.verify(token, JWT_SECRET) as AccessTokenPayload;
     if (payload.typ !== "access" || !payload.userId) {
       res.status(401).json({ error: "Invalid token. Please log in again." });
+      return;
+    }
+  } catch {
+    res.status(401).json({ error: "Session expired. Please log in again." });
+    return;
+  }
+  try {
+    const [account] = await db.select().from(users).where(eq(users.id, payload.userId)).limit(1);
+    if (!account) {
+      res.status(401).json({ error: "Account not found. Please log in again." });
+      return;
+    }
+    if (account.status !== "active") {
+      res.status(403).json({ error: "This account is not active.", code: "ACCOUNT_DISABLED" });
       return;
     }
     (req as AuthenticatedRequest).userId = payload.userId;
     next();
   } catch {
-    res.status(401).json({ error: "Session expired. Please log in again." });
+    res.status(503).json({ error: "Authentication is temporarily unavailable.", code: "AUTH_UNAVAILABLE" });
   }
 }

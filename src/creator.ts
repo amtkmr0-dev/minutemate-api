@@ -6,20 +6,19 @@
  * rupees and paise (same convention as wallet.ts).
  *
  * Trial-mode decisions (revisit before production scale):
- * - Creator onboarding auto-approves verificationStatus='approved'. The admin
- *   approval queue arrives with the dashboard phase.
+ * - New creator profiles require approval before online presence or acceptance.
  * - Uploads are validated data URLs stored inline (no object storage yet).
  *   Migrate to S3/R2 before real KYC volume.
  * - Call earnings go 100% to the creator (no platform commission deducted).
  */
 
 import type { Express, Request, Response, NextFunction } from "express";
-import { and, desc, eq, ilike, ne, or } from "drizzle-orm";
+import { and, desc, eq, exists, ilike, ne, or } from "drizzle-orm";
 import { randomUUID } from "node:crypto";
 import { db, sql } from "./db.js";
 import {
   authenticateToken,
-  issueOtp,
+  sendOtp,
   normalizeIndianMobile,
   signAccessToken,
   signRefreshToken,
@@ -27,6 +26,7 @@ import {
   type AuthenticatedRequest,
 } from "./auth.js";
 import { getUserById } from "./payments.js";
+import { SmsError } from "./sms.js";
 import { getWalletSummary } from "./wallet.js";
 import {
   blocks,
@@ -52,7 +52,7 @@ import {
 function httpError(res: Response, err: unknown, fallback: string): void {
   const status = (err as { statusCode?: number })?.statusCode ?? 500;
   const message = err instanceof Error ? err.message : fallback;
-  res.status(status).json({ error: message });
+  res.status(status).json({ error: message, ...(err instanceof SmsError ? { code: err.code, smsConfigured: err.smsConfigured } : {}) });
 }
 
 function safeJsonArray(raw: string | null | undefined): string[] {
@@ -265,8 +265,8 @@ export function registerCreatorRoutes(app: Express): void {
       return;
     }
     try {
-      await issueOtp(phone);
-      res.json({ success: true, message: "OTP sent successfully" });
+      await sendOtp(phone);
+      res.json({ success: true, message: "OTP accepted by SMS provider. Delivery may take a moment.", smsConfigured: true });
     } catch (err: any) {
       // BUG 13 fix (2026-09-30): 429 for cooldown.
       if (err?.message?.includes("Please wait")) {
@@ -287,7 +287,7 @@ export function registerCreatorRoutes(app: Express): void {
     try {
       const result = await verifyOtp(phone, String(body.otp ?? ""));
       if (!result.ok) {
-        res.status(result.status).json({ error: result.error });
+        res.status(result.status).json({ error: result.error, ...(result.code ? { code: result.code } : {}) });
         return;
       }
       // Creator app login: ensure the account carries the creator role
@@ -504,7 +504,7 @@ export function registerCreatorRoutes(app: Express): void {
     }
   });
 
-  /** One-shot onboarding: creates/updates the public profile. Trial mode: auto-approved. */
+  /** One-shot onboarding: creates/updates a profile, preserving approval state. */
   app.post("/api/creator/onboarding", authenticateToken, async (req: Request, res: Response) => {
     const body = (req.body as Record<string, unknown> | undefined) ?? {};
     // 2026-09-28: accept the app's field names as aliases (fullName -> displayName).
@@ -627,8 +627,19 @@ export function registerCreatorRoutes(app: Express): void {
   app.post("/api/creator/presence", authenticateToken, requireRole("creator", "agency", "admin"), async (req: Request, res: Response) => {
     const online = (req.body as { online?: unknown } | undefined)?.online === true;
     try {
-      await db.update(creatorProfiles).set({ isOnline: online, updatedAt: new Date() }).where(eq(creatorProfiles.userId, authed(req)));
-      res.json({ success: true, isOnline: online });
+      const conditions = [eq(creatorProfiles.userId, authed(req))];
+      if (online) conditions.push(eq(creatorProfiles.verificationStatus, "approved"));
+      const [updated] = await db.update(creatorProfiles)
+        .set({ isOnline: online, updatedAt: new Date() })
+        .where(and(...conditions)).returning({ isOnline: creatorProfiles.isOnline });
+      if (!updated) {
+        res.status(online ? 403 : 404).json({
+          error: online ? "Creator approval is required to go online." : "Creator profile not found.",
+          code: online ? "CREATOR_NOT_APPROVED" : "CREATOR_PROFILE_REQUIRED",
+        });
+        return;
+      }
+      res.json({ success: true, isOnline: updated.isOnline });
     } catch (err) {
       httpError(res, err, "Could not update presence.");
     }
@@ -789,30 +800,67 @@ export function registerCreatorRoutes(app: Express): void {
   });
 
   app.post("/api/creator/withdraw", authenticateToken, requireRole("creator", "agency", "admin"), async (req: Request, res: Response) => {
-    const amountPaise = Math.round(Number((req.body as { amount?: unknown } | undefined)?.amount ?? 0));
-    if (!Number.isFinite(amountPaise) || amountPaise < 50000) {
-      res.status(400).json({ error: "Minimum withdrawal is ₹500." });
+    const body = (req.body as { amount?: unknown; requestId?: unknown } | undefined) ?? {};
+    const amountPaise = typeof body.amount === "number" ? body.amount
+      : typeof body.amount === "string" && /^\d+$/.test(body.amount) ? Number(body.amount) : NaN;
+    if (!Number.isSafeInteger(amountPaise) || amountPaise < 50000) {
+      res.status(400).json({ error: "Withdrawal must be whole paise, at least ₹500.", code: "INVALID_AMOUNT" });
       return;
     }
+    if (body.requestId !== undefined && (typeof body.requestId !== "string"
+      || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(body.requestId))) {
+      res.status(400).json({ error: "requestId must be a UUID.", code: "INVALID_REQUEST_ID" });
+      return;
+    }
+    const id = typeof body.requestId === "string" ? body.requestId : randomUUID();
     try {
       const userId = authed(req);
+      const replyToExisting = async (): Promise<boolean> => {
+        const [existing] = await db.select().from(withdrawals).where(eq(withdrawals.id, id)).limit(1);
+        if (!existing) return false;
+        if (existing.creatorId !== userId || Number(existing.amountPaise) !== amountPaise) {
+          res.status(409).json({ error: "This requestId has already been used.", code: "WITHDRAWAL_REQUEST_CONFLICT" });
+          return true;
+        }
+        const [wallet] = await db.select().from(creatorWallets).where(eq(creatorWallets.userId, userId)).limit(1);
+        if (!wallet) throw new Error("Could not load current earnings.");
+        res.json({ success: true, duplicate: true, id: existing.id, amount: Number(existing.amountPaise) / 100,
+          status: existing.status, balance: Number(wallet.balancePaise) / 100 });
+        return true;
+      };
+      if (await replyToExisting()) return;
       const bank = await db.select().from(creatorBankDetails).where(eq(creatorBankDetails.userId, userId)).limit(1);
-      const destination = bank[0]?.upiId || (bank[0]?.accountNumber ? `A/C ••${bank[0].accountNumber.slice(-4)} ${bank[0].ifsc}` : "");
+      const destination = bank[0]?.upiId || (bank[0]?.accountNumber && bank[0]?.ifsc ? `A/C ••${bank[0].accountNumber.slice(-4)} ${bank[0].ifsc}` : "");
       if (!destination) {
         res.status(400).json({ error: "Add your UPI ID or bank details first." });
         return;
       }
-      const debited = (await sql(
-        `UPDATE creator_wallets SET balance_paise = balance_paise - $1, updated_at = now()
-         WHERE user_id = $2 AND balance_paise >= $1 RETURNING balance_paise`,
-        [amountPaise, userId],
-      )) as Array<{ balance_paise: string }>;
+      // One PostgreSQL statement: insertion failure rolls the debit back too.
+      // No transfer is made here; this only reserves a pending withdrawal.
+      let debited: Array<{ id: string; balance_paise: string }>;
+      try {
+        debited = (await sql(
+          `WITH debit AS (
+           UPDATE creator_wallets SET balance_paise = balance_paise - $1, updated_at = now()
+           WHERE user_id = $2 AND balance_paise >= $1 RETURNING balance_paise
+         ), requested AS (
+           INSERT INTO withdrawals (id, creator_id, amount_paise, destination, status)
+           SELECT $3, $2, $1, $4, 'pending' FROM debit RETURNING id
+         )
+         SELECT requested.id, debit.balance_paise FROM requested CROSS JOIN debit`,
+          [amountPaise, userId, id, destination],
+        )) as Array<{ id: string; balance_paise: string }>;
+      } catch (err) {
+        // The withdrawal primary key arbitrates concurrent retries. A conflict
+        // aborts the entire statement, including its provisional debit.
+        if ((err as { code?: string })?.code === "23505" && await replyToExisting()) return;
+        throw err;
+      }
       if (debited.length === 0) {
+        if (await replyToExisting()) return;
         res.status(400).json({ error: "Insufficient earnings balance." });
         return;
       }
-      const id = randomUUID();
-      await db.insert(withdrawals).values({ id, creatorId: userId, amountPaise, destination });
       res.json({ success: true, id, amount: amountPaise / 100, status: "pending", balance: Number(debited[0].balance_paise) / 100 });
     } catch (err) {
       httpError(res, err, "Could not request withdrawal.");
@@ -889,10 +937,21 @@ export function registerCreatorRoutes(app: Express): void {
   });
 
   app.get("/api/chat/threads", authenticateToken, async (req: Request, res: Response) => {
+    const side = req.query.side;
+    if (side !== undefined && side !== "user" && side !== "creator") {
+      res.status(400).json({ error: "side must be user or creator." });
+      return;
+    }
     try {
       const userId = authed(req);
       const me = await getUserById(userId);
-      const iAmCreator = me?.role === "creator" || me?.role === "agency";
+      const creatorRole = me?.role === "creator" || me?.role === "agency";
+      if (side === "creator" && !creatorRole) {
+        res.status(403).json({ error: "Creator-side messaging requires a creator or agency account." });
+        return;
+      }
+      // An account can use both apps. Omission keeps the older role-based default.
+      const iAmCreator = side === undefined ? creatorRole : side === "creator";
       const sideFilter = iAmCreator ? "t.creator_id" : "t.user_id";
       const rows = await sql(
         `SELECT t.id, t.user_id, t.creator_id, t.created_at,
@@ -1279,11 +1338,21 @@ export function registerCreatorRoutes(app: Express): void {
         res.status(409).json({ error: `Call is already ${s.status}.` });
         return;
       }
-      await db.update(callSessions)
+      const approval = db.select({ userId: creatorProfiles.userId }).from(creatorProfiles)
+        .where(and(eq(creatorProfiles.userId, authed(req)), eq(creatorProfiles.verificationStatus, "approved")));
+      const [updated] = await db.update(callSessions)
         .set({ status: "active", startedAt: new Date(), lastHeartbeatAt: new Date() })
-        .where(eq(callSessions.id, s.id));
-      const updated = await db.select().from(callSessions).where(eq(callSessions.id, s.id)).limit(1);
-      res.json({ success: true, ...sessionView(updated[0]) });
+        .where(and(eq(callSessions.id, s.id), eq(callSessions.status, "ringing"), exists(approval)))
+        .returning();
+      if (!updated) {
+        const approved = (await approval.limit(1)).length > 0;
+        res.status(approved ? 409 : 403).json({
+          error: approved ? "This call is no longer available." : "Creator approval is required to accept calls.",
+          code: approved ? "CALL_NOT_AVAILABLE" : "CREATOR_NOT_APPROVED",
+        });
+        return;
+      }
+      res.json({ success: true, ...sessionView(updated) });
     } catch (err) {
       httpError(res, err, "Could not accept the call.");
     }

@@ -78,8 +78,8 @@ export type PaymentsMode = "razorpay" | "simulation";
 
 /**
  * PAYMENTS_MODE=simulation lets the whole flow run without real money
- * (SIM_ orders, no Razorpay API calls). NEVER allowed in production unless
- * explicitly enabled — a simulated success must never credit real wallets.
+ * (SIM_ orders, no Razorpay API calls). Never allowed in production; local
+ * simulation additionally requires an explicit flag and an isolated database.
  */
 export function getPaymentsMode(): PaymentsMode {
   return (process.env.PAYMENTS_MODE || "razorpay").toLowerCase() === "simulation"
@@ -88,16 +88,14 @@ export function getPaymentsMode(): PaymentsMode {
 }
 
 export function isSimulationAllowed(): boolean {
-  if (getPaymentsMode() !== "simulation") return false;
-  if (process.env.NODE_ENV === "production" && process.env.PAYMENTS_SIMULATION_ENABLED !== "true") {
-    return false;
-  }
-  return true;
+  return getPaymentsMode() === "simulation"
+    && (process.env.NODE_ENV === "test" || process.env.NODE_ENV === "development")
+    && process.env.PAYMENTS_SIMULATION_ENABLED === "true";
 }
 
 export class PaymentNotConfiguredError extends Error {
-  statusCode = 500;
-  constructor(message = "Payment is not configured on the server") {
+  statusCode = 503;
+  constructor(message = "Payment is not configured on the server", readonly code = "PAYMENTS_NOT_CONFIGURED") {
     super(message);
     this.name = "PaymentNotConfiguredError";
   }
@@ -149,6 +147,9 @@ export async function createRechargeOrder(amountRupees: number, userId: string):
   }
 
   const simulated = isSimulationAllowed();
+  if (getPaymentsMode() === "simulation" && !simulated) {
+    throw new PaymentNotConfiguredError("Payment simulation is disabled on this server.", "PAYMENTS_SIMULATION_DISABLED");
+  }
   let orderId: string;
 
   if (simulated) {
@@ -418,7 +419,7 @@ export async function verifyAndCreditPayment(args: {
 
 /**
  * Simulate a successful payment for a SIM_ order. Only works when simulation
- * is explicitly allowed (never in production unless enabled) and only for
+ * is explicitly allowed outside production and only for
  * orders created in simulation mode.
  */
 export async function simulateSuccessfulPayment(args: {
